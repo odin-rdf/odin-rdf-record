@@ -26,9 +26,11 @@
 // log to a consumer procedure set, the seam the resident store binds
 // to (RECORD-T-0004); resident.odin is the resident layout — the fact
 // table, the dictionary arena, the epoch table — and load.odin the
-// Loader that fills it from the replay seam (RECORD-T-0007); the
-// permutations, snapshots, and the read API follow as their tasks
-// land. The CLI (verify, dump, head) will live
-// in tool/ at the repository root, following the family's root-level
-// main-package pattern.
+// Loader that fills it from the replay seam (RECORD-T-0007);
+// permute.odin is the six sorted permutations, radix-built after
+// replay (RECORD-T-0008); snapshot.odin is publication and the
+// refcounted read handle — Index_Set, Latest/At, the epoch discipline
+// (RECORD-T-0009); the read API follows as its task lands. The CLI
+// (verify, dump, head) lives in tool/ at the repository root,
+// following the family's root-level main-package pattern.
 package record

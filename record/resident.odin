@@ -155,7 +155,9 @@ Store :: struct {
 	epochs:    [dynamic][]Epoch_Meta, // EPOCH_CHUNK_SIZE-entry chunks, indexed by epoch-1
 	n_epochs:  u32, // committed epochs; equals the last epoch, since epochs are contiguous from 1
 	notes:     [dynamic]Env_Note, // in log order; last_epoch is non-decreasing
-	ord:       [Order][]u32, // the six sorted FactID permutations (permute.odin); empty until built
+	ord:       [Order][]u32, // the six sorted FactID permutations (permute.odin); moved into an Index_Set on publish
+	idx:       ^Index_Set, // the published index set (snapshot.odin); atomic, nil until the first publish
+	published: u32, // the published epoch (log.md par. 7.1 step 5); atomic, stored after idx
 	allocator: runtime.Allocator,
 }
 
@@ -175,8 +177,15 @@ store_init :: proc(s: ^Store, allocator := context.allocator) {
 }
 
 // store_destroy frees everything the store owns. Views handed out by
-// dict_bytes and pointers from store_fact die with it.
+// dict_bytes and pointers from store_fact die with it. Every snapshot
+// must have been released first — the store's publish reference must
+// be the published set's last, which is RECORD-A-0005's close
+// assertion making a leaked snapshot loud.
 store_destroy :: proc(s: ^Store) {
+	if s.idx != nil {
+		assert(s.idx.refs == 1, "store_destroy: a snapshot is still holding the published set")
+		release_set(s, s.idx)
+	}
 	for c in s.facts {
 		delete(c, s.allocator)
 	}
