@@ -65,6 +65,20 @@ makes epoch allocation and chaining trivially correct, and this task is
 where that premise becomes code shape. Writer state: current segment file,
 offset, previous hash, next epoch, next fact ID.
 
+**No batched-append API, decided 2026-08-19 (owner + session).** The
+append surface is one shape — write, fsync, acknowledge, one record at a
+time — because the *epoch* is the batch: `nOps` makes "many entries, one
+fsync" a property of the format, not of the API (`log.md` §7.1's bulk-
+import amortization), and at 33 bytes per op `MaxRecordSize` holds ~2
+million ops, so the ceiling never binds at the target scale. An API that
+shared one fsync across several epochs would either acknowledge before
+durability (violating §7.1's boundary) or be group commit, which coalesces
+concurrent committers we structurally do not have. The epoch is also the
+audit grain — one actor, one reason — and the API should not tempt anyone
+to widen it for throughput. `sync(2)` is never used: the primitives are
+`fsync` on the segment file (F_FULLFSYNC question per the criteria) and
+`fsync` on the directory at rotation.
+
 ### Dependencies
 
 RECORD-T-0001 (the encodings this path writes).

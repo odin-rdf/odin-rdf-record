@@ -4,12 +4,12 @@ level: vision
 title: "odin-rdf-record"
 short_code: "RECORD-V-0001"
 created_at: 2026-08-19T15:53:53.175284+00:00
-updated_at: 2026-08-19T15:53:53.175284+00:00
+updated_at: 2026-08-19T17:42:29.629887+00:00
 archived: false
 
 tags:
   - "#vision"
-  - "#phase/draft"
+  - "#phase/published"
 
 
 exit_criteria_met: false
