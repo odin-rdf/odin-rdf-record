@@ -83,28 +83,38 @@ fact_component :: proc(f: ^Fact, c: Component) -> u32 {
 // one buffer, reused across the six sorts, freed before returning.
 // The resident form stays []FactID and nothing else (RECORD-A-0004,
 // api.md par. 5).
+// radix_pass is one stable counting pass over the 16-bit digit of each
+// element's column value at `shift`: histogram, exclusive prefix sum,
+// scatter in source order — stability is what carries the previous
+// passes' order, and ultimately the FactID order the chain starts
+// from, through to the result. Returns whether it scattered; a pass
+// whose elements all share one digit is the identity and is skipped
+// without moving anything.
 @(private = "file")
-Perm_Rec :: struct {
-	hi: u64, // components 0 and 1 of the order's key, packed big end first
-	lo: u64, // components 2 and 3
-	id: u32,
-}
-
-// perm_rec_less compares key then FactID — resident ids are u32s whose
-// encoding already sorts inlined values numerically within a type
-// (api.md par. 3.2), and packing preserves the component order under
-// integer comparison. The FactID tie makes the ordering total: equal
-// quads (a re-asserted generation) sit adjacent in log order, and the
-// same log yields byte-identical permutations.
-@(private = "file")
-perm_rec_less :: proc(a, b: Perm_Rec) -> bool {
-	if a.hi != b.hi {
-		return a.hi < b.hi
+radix_pass :: proc(src, dst: []u32, col: []u32, counts: []u32, shift: uint) -> bool {
+	if len(src) == 0 {
+		return false
 	}
-	if a.lo != b.lo {
-		return a.lo < b.lo
+	slice.fill(counts, 0)
+	for id in src {
+		counts[(col[id] >> shift) & 0xFFFF] += 1
 	}
-	return a.id < b.id
+	d0 := (col[src[0]] >> shift) & 0xFFFF
+	if int(counts[d0]) == len(src) {
+		return false
+	}
+	total: u32 = 0
+	for &c in counts {
+		n := c
+		c = total
+		total += n
+	}
+	for id in src {
+		d := (col[id] >> shift) & 0xFFFF
+		dst[counts[d]] = id
+		counts[d] += 1
+	}
+	return true
 }
 
 // store_build_permutations sorts all six orders over the current fact
@@ -112,24 +122,68 @@ perm_rec_less :: proc(a, b: Perm_Rec) -> bool {
 // also the eventual delta-merge rebuild (api.md par. 5.2): one code
 // path, exercised on every load. Rebuilding replaces each order
 // wholesale; the fact table itself is never reordered.
+//
+// The sort is LSD radix rather than comparison, because this is the
+// hottest procedure on the boot path and every wake from eviction pays
+// it (api.md par. 8): a comparison sort's ~38M indirect comparator
+// calls cost 535 ms at ISMS scale where these linear passes cost tens
+// of milliseconds. Per order, one stable 16-bit counting pass per
+// component digit, least-significant component first, starting from
+// FactID order — so equal quads end FactID-ascending by stability, the
+// ordering is total, and the same log yields byte-identical
+// permutations. Component values are gathered once into dense columns
+// (the passes then read 1.3 MB columns instead of gathering from the
+// fact table), and a component whose values never reach the high 16
+// bits — every dictionary-id-only column in practice — skips that
+// digit's pass entirely. All of it is transient scaffolding in log.md
+// par. 8's sense, freed before returning; the resident form stays
+// []FactID and nothing else (RECORD-A-0004, api.md par. 5).
 store_build_permutations :: proc(s: ^Store) {
-	recs := make([]Perm_Rec, s.n_facts, s.allocator)
-	defer delete(recs, s.allocator)
+	n := int(s.n_facts)
+	cols: [Component][]u32
+	maxs: [Component]u32
+	for c in Component {
+		cols[c] = make([]u32, n, s.allocator)
+	}
+	defer for c in Component {
+		delete(cols[c], s.allocator)
+	}
+	for i in 0 ..< n {
+		f := store_fact(s, u32(i))
+		for c in Component {
+			v := fact_component(f, c)
+			cols[c][i] = v
+			maxs[c] = max(maxs[c], v)
+		}
+	}
+	buf_a := make([]u32, n, s.allocator)
+	buf_b := make([]u32, n, s.allocator)
+	counts := make([]u32, 1 << 16, s.allocator)
+	defer {
+		delete(buf_a, s.allocator)
+		delete(buf_b, s.allocator)
+		delete(counts, s.allocator)
+	}
+
 	for o in Order {
 		key := order_key(o)
-		for i in u32(0) ..< s.n_facts {
-			f := store_fact(s, i)
-			recs[i] = {
-				u64(fact_component(f, key[0])) << 32 | u64(fact_component(f, key[1])),
-				u64(fact_component(f, key[2])) << 32 | u64(fact_component(f, key[3])),
-				i,
+		for i in 0 ..< n {
+			buf_a[i] = u32(i)
+		}
+		cur, alt := buf_a, buf_b
+		for ki := 3; ki >= 0; ki -= 1 {
+			col := cols[key[ki]]
+			if radix_pass(cur, alt, col, counts, 0) {
+				cur, alt = alt, cur
+			}
+			if maxs[key[ki]] > 0xFFFF {
+				if radix_pass(cur, alt, col, counts, 16) {
+					cur, alt = alt, cur
+				}
 			}
 		}
-		slice.sort_by(recs, perm_rec_less)
-		ids := make([]u32, s.n_facts, s.allocator)
-		for r, i in recs {
-			ids[i] = r.id
-		}
+		ids := make([]u32, n, s.allocator)
+		copy(ids, cur)
 		delete(s.ord[o], s.allocator)
 		s.ord[o] = ids
 	}

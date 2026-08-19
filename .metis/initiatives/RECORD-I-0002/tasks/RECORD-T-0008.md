@@ -129,3 +129,30 @@ all six asserted through the public key surface in `tests/scale`, and
 the build time logged there per the acceptance criterion.
 
 42 record-package tests (+3); `make check` and `make test` green.
+
+### 2026-08-19 (follow-up, same session) — the radix sort, spent
+
+The session chose not to leave the 535 ms on the boot path: under the
+eviction model (api.md §8) every wake pays store_build_permutations,
+staggered machine boots multiply it by hundreds of stores, and the
+next user after an idle eviction pays it interactively. The sort is
+now LSD radix: per order, one stable 16-bit counting pass per
+component digit, least-significant component first, from FactID order
+— stability carries the tie, so determinism needs no comparator at
+all. Component values are gathered once into dense columns; a
+component whose values never reach the high 16 bits (every
+dictionary-id-only column in practice) skips that digit's pass, and a
+single-digit pass is detected from its histogram and skipped as the
+identity.
+
+**Measured: 39 ms at `-o:speed`** (193 ms in the debug harness) for
+the six orders at 3.4×10⁵ facts — 14× over the record sort, and the
+"tens of milliseconds" both documents assumed, restored. Optimized
+boot at ISMS bulk scale is now verify 40 ms + replay ~50 ms + sort
+39 ms — well inside the sub-second criterion with margin for T-0011's
+end-to-end path. Both document amendments updated to tell the whole
+story (comparison sorts miss the estimate ~18×; the implemented radix
+meets it). The oracle, exact-order, inline-order, and determinism
+tests passed unchanged across the algorithm swap — they are
+algorithm-independent by construction, which is what made the swap
+safe — plus a new empty-store case (43 record tests).

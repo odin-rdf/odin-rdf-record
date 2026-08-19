@@ -52,6 +52,17 @@ test_permutations_exact :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_permutations_empty :: proc(t: ^testing.T) {
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	store_build_permutations(&s)
+	for o in Order {
+		testing.expect_value(t, len(s.ord[o]), 0)
+	}
+}
+
+@(test)
 test_permutations_inline_order :: proc(t: ^testing.T) {
 	s: Store
 	store_init(&s)
