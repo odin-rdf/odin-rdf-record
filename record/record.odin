@@ -31,7 +31,10 @@
 // replay (RECORD-T-0008); snapshot.odin is publication and the
 // refcounted read handle — Index_Set, Latest/At, the epoch discipline
 // (RECORD-T-0009); read.odin is the pattern-matching read API — Match,
-// Iter, Resolve, Bytes, Term (RECORD-T-0010). The CLI
+// Iter, Resolve, Bytes, Term (RECORD-T-0010); boot.odin is store_open,
+// the composition of all of it — recover, replay, sort, publish,
+// writer resume, and the startup environment note (RECORD-T-0011). The
+// CLI
 // (verify, dump, head) lives in tool/ at the repository root,
 // following the family's root-level main-package pattern.
 package record

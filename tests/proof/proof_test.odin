@@ -60,7 +60,6 @@ build_proof_store :: proc(t: ^testing.T) {
 	os.remove(STORE + "/HEAD")
 
 	w, err := rec.writer_create(STORE, rec.posix_file_ops())
-	defer rec.writer_destroy(&w)
 	testing.expect_value(t, err, rec.Writer_Error.None)
 
 	terms1 := [2]rec.Term_Def{
@@ -88,10 +87,28 @@ build_proof_store :: proc(t: ^testing.T) {
 	testing.expect_value(t, rec.writer_commit(&w, {epoch = 3, wall = WALL + 2, ops = ops3[:]}), rec.Writer_Error.None)
 	ops4 := [1]rec.Fact_Op{{op = .Retract, s = 2, p = 2, o = 3, g = rec.DEFAULT_GRAPH}}
 	testing.expect_value(t, rec.writer_commit(&w, {epoch = 4, wall = WALL + 3, ops = ops4[:]}), rec.Writer_Error.None)
+	testing.expect_value(t, rec.writer_destroy(&w), rec.Writer_Error.None)
 
-	proof_head = w.head
-	proof_epoch = w.prev_epoch
-	proof_next_term = w.next_term_id
+	// The corpus substrate is a resumed-and-grown store (RECORD-T-0011):
+	// boot end to end through store_open — which appends the startup
+	// environment note, the payload differing from the placeholder above
+	// — then one more epoch through the resumed writer. Every clean and
+	// injured case downstream now also proves that resume produced a
+	// chain an independent implementation accepts.
+	s: rec.Store
+	w2, tear, oerr, lerr, werr := rec.store_open(&s, STORE, rec.posix_file_ops())
+	testing.expect_value(t, oerr, rec.Open_Error.None)
+	testing.expect_value(t, lerr, rec.Load_Error.None)
+	testing.expect_value(t, werr, rec.Writer_Error.None)
+	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
+	ops5 := [1]rec.Fact_Op{{op = .Assert, s = 3, p = 2, o = five, g = 1}}
+	testing.expect_value(t, rec.writer_commit(&w2, {epoch = 5, wall = WALL + 4, ops = ops5[:]}), rec.Writer_Error.None)
+
+	proof_head = w2.head
+	proof_epoch = w2.prev_epoch
+	proof_next_term = w2.next_term_id
+	testing.expect_value(t, rec.writer_destroy(&w2), rec.Writer_Error.None)
+	rec.store_destroy(&s)
 }
 
 @(private = "file")

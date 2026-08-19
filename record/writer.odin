@@ -64,8 +64,14 @@ Read_Status :: enum {
 File_Ops :: struct {
 	data:     rawptr,
 	// create opens a new file for append; it must refuse a path that
-	// already exists (a segment is never reopened by the writer).
-	create:   proc(data: rawptr, path: string) -> (File_Handle, bool),
+	// already exists (a segment is never reopened by the writer's own
+	// append path).
+	create:      proc(data: rawptr, path: string) -> (File_Handle, bool),
+	// open_append opens an existing file to append at its end; it must
+	// refuse a path that does not exist. create's mirror image: the two
+	// answer different questions (RECORD-T-0011), and resume — the one
+	// caller — reopens only the tail segment the verified walk named.
+	open_append: proc(data: rawptr, path: string) -> (File_Handle, bool),
 	// append writes all the bytes at the end of the file, or fails.
 	append:   proc(data: rawptr, f: File_Handle, bytes: []byte) -> bool,
 	// sync makes everything appended so far durable — the boundary of
@@ -111,6 +117,7 @@ Writer_Error :: enum {
 	Bad_Op,
 	Too_Large,
 	IO_Create,
+	IO_Open, // open_append failed on the tail segment resume named
 	IO_Write,
 	IO_Sync,
 	IO_Close,
@@ -141,9 +148,8 @@ Writer :: struct {
 
 // writer_create initializes a brand-new store: segment 000001 with a
 // zero base hash, synced file and directory, and an initial HEAD.
-// Resuming an existing store needs the open path's verified head and
-// arrives with it (RECORD-T-0003/T-0004). The caller owns the Writer
-// whatever err says and releases it with writer_destroy.
+// Resuming an existing store is writer_open. The caller owns the
+// Writer whatever err says and releases it with writer_destroy.
 writer_create :: proc(
 	dir: string,
 	ops: File_Ops,
@@ -163,6 +169,61 @@ writer_create :: proc(
 	w.allocator = allocator
 	if err = open_segment(&w); err != .None {
 		return w, err
+	}
+	write_head_file(&w)
+	return w, .None
+}
+
+// writer_open resumes the single writer of an existing store from the
+// verified walk's result — recover (or a clean verify) first, then
+// this, with the Verify_Result handed straight across (RECORD-T-0011).
+// Resume trusts the walk and nothing else: every counter — the head
+// the next commit chains from, the epoch, the term and fact high-water
+// marks, the segment number, size, and commit count — comes from `r`,
+// and HEAD stays advisory (it is rewritten here, never read). Two
+// shapes of tail: one that ends mid-segment is reopened for append at
+// its verified end — a recovered tear appends at the truncation point,
+// a header-only segment right after its header; one that ends with a
+// seal is left sealed and the next segment is created, finishing the
+// rotation a crash interrupted, with bytes identical to the rotation's
+// own.
+writer_open :: proc(
+	dir: string,
+	ops: File_Ops,
+	r: Verify_Result,
+	target_size := SEGMENT_TARGET_SIZE,
+	allocator := context.allocator,
+) -> (
+	w: Writer,
+	err: Writer_Error,
+) {
+	assert(r.segments >= 1, "writer_open: no verified store to resume")
+	w.ops = ops
+	w.dir = strings.clone(dir, allocator)
+	w.target_size = target_size
+	w.allocator = allocator
+	w.head = r.head
+	w.prev_epoch = r.last_epoch
+	w.next_term_id = r.next_term_id
+	w.fact_count = r.fact_count
+	if r.tail_sealed {
+		w.seg_no = r.segments + 1
+		w.epoch_records = 0
+		if err = open_segment(&w); err != .None {
+			return w, err
+		}
+	} else {
+		w.seg_no = r.segments
+		w.seg_size = r.tail_size
+		w.epoch_records = r.tail_records
+		path_buf: [512]u8
+		path := segment_path(path_buf[:], dir, w.seg_no)
+		f, ok := w.ops.open_append(w.ops.data, path)
+		if !ok {
+			w.failed = true
+			return w, .IO_Open
+		}
+		w.seg = f
 	}
 	write_head_file(&w)
 	return w, .None

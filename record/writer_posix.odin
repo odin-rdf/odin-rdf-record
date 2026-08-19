@@ -23,8 +23,9 @@ import "core:sys/posix"
 // the data pointer is nil and every handle is a file descriptor.
 posix_file_ops :: proc() -> File_Ops {
 	return {
-		create   = posix_create,
-		append   = posix_append,
+		create      = posix_create,
+		open_append = posix_open_append,
+		append      = posix_append,
 		sync     = posix_sync,
 		close    = posix_close,
 		sync_dir = posix_sync_dir,
@@ -43,6 +44,18 @@ DARWIN_F_FULLFSYNC :: 51
 posix_create :: proc(_: rawptr, path: string) -> (File_Handle, bool) {
 	buf: [1024]u8
 	fd := posix.open(cpath(buf[:], path), {.WRONLY, .CREAT, .EXCL}, posix.mode_t{.IRUSR, .IWUSR, .IRGRP, .IROTH})
+	if fd < 0 {
+		return 0, false
+	}
+	return File_Handle(uintptr(fd)), true
+}
+
+// posix_open_append opens an existing file for appending — no O_CREAT,
+// so an absent path is refused, create's mirror image.
+@(private)
+posix_open_append :: proc(_: rawptr, path: string) -> (File_Handle, bool) {
+	buf: [1024]u8
+	fd := posix.open(cpath(buf[:], path), {.WRONLY, .APPEND})
 	if fd < 0 {
 		return 0, false
 	}
