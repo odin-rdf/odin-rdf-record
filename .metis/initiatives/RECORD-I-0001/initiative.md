@@ -159,3 +159,32 @@ Exit: `make test` green including the cross-implementation suite; replay
 and verification of the synthetic ISMS-scale log measured under one second;
 the README's status section updated from "design" to reflect a real format
 version 1.
+
+## Status — 2026-08-19: all six tasks complete, exit criteria met
+
+The scale measurement (RECORD-T-0006, `tests/scale`, deterministic seed,
+Apple Silicon dev machine; Linux production numbers to be taken when a
+production host exists): the synthetic ISMS-shaped log — 400,000 fact
+operations, 95,343 distinct terms — in both of `log.md` §9's epoch shapes:
+
+| shape | epochs | log size | full verify | full replay |
+|---|---|---|---|---|
+| bulk-loaded | 10³ | 16.9 MB | **105 ms** | **166 ms** |
+| hand-edited | 2×10⁵ | 38.4 MB | **272 ms** | **342 ms** |
+
+Both an order of magnitude inside the vision's sub-second criterion, and
+the sizes land inside §9's 18–41 MB projection. Replay here is the
+verifying reader plus a counting consumer; the resident store's build cost
+(sorting six permutations, ~tens of ms per `architecture.md` §Scale) is
+the next initiative's to measure on top.
+
+The cross-implementation suite (`tests/proof`): 29 fault-corpus cases —
+truncations, torn shapes, bit flips sealed and open, header tampering
+with recomputed CRCs, husks, crafted epoch gaps and chain breaks, a
+future-version header, a removed segment — and the Odin verifier and the
+Python verifier (written from `log.md` alone, `tests/verify/`) agree
+verdict for verdict, head hash and epoch included, with each case also
+pinned to its expected verdict so the two cannot drift together. The
+"afternoon claim" held: the Python verifier is ~270 lines of stdlib, and
+writing it surfaced no documentation bug — the amendments T-0003 and
+T-0005 folded into `log.md` were sufficient, which is what they were for.

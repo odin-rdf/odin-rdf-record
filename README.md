@@ -21,16 +21,32 @@ buys, in order of why the repository exists:
 - **Epoch-pinned reads.** A snapshot is a value, not a lock or a transaction;
   any historical epoch is readable at any time, at no retention cost.
 
-## Status: design
+## Status: the log of record is implemented — format version 1
 
-Implementation has not begun. The founding documents in [`doc/design/`](doc/design/)
-specify the on-disk format ([`log.md`](doc/design/log.md)), the resident layout
-and the pattern-matching API ([`api.md`](doc/design/api.md)), and the premises
-both inherit ([`architecture.md`](doc/design/architecture.md)).
-`.metis/vision.md` is the strategic source of truth, and the phase-0 ADRs under
-`.metis/adrs/` record the decisions that must be settled before the first
-record is written — several of them are frozen at first write and are not
-revisable afterwards.
+The log layer is real (RECORD-I-0001, 2026-08-19): the encoding layer with
+golden vectors computed independently of the code, the single-writer append
+path (append → fsync → acknowledge, crash-swept at every operation cut
+point), the open path (full chain verification at every open, torn-tail
+recovery under the position rule), replay through a consumer seam the
+resident store will bind to, and the `record` CLI (`verify`, `dump`,
+`head`). The proof layer is part of the suite, not a promise: an
+independent Python verifier written from `log.md` alone
+([`tests/verify/rdflog_verify.py`](tests/verify/rdflog_verify.py)) must
+agree with the Odin implementation verdict for verdict over a shared fault
+corpus on every `make test`, and a synthetic ISMS-shaped log (~4×10⁵ ops,
+~10⁵ terms) is verified and replayed under the vision's sub-second
+criterion — measured at tens to hundreds of milliseconds in both of
+`log.md` §9's epoch shapes.
+
+Not yet built: the memory-resident projection (fact table, dictionary
+arena, permutations), the snapshot API, and `Apply` — the next
+initiatives. The founding documents in [`doc/design/`](doc/design/) remain
+the spec: the on-disk format ([`log.md`](doc/design/log.md)), the resident
+layout and the pattern-matching API ([`api.md`](doc/design/api.md)), and
+the premises both inherit ([`architecture.md`](doc/design/architecture.md)).
+`.metis/vision.md` is the strategic source of truth, and the ADRs under
+`.metis/adrs/` record the decisions frozen at first write — the format now
+holds real bytes, so they are no longer revisable.
 
 ## Position in the family
 
@@ -70,6 +86,10 @@ make tool    # build the record CLI into build/record
 make help    # list targets
 make clean   # remove build/
 ```
+
+`make test` needs `python3`: the cross-implementation suite runs the
+independent verifier in `tests/verify/` over a fault corpus and requires
+both implementations to agree verdict for verdict.
 
 The CLI is the read surface an auditor gets (`log.md` §12 q6):
 

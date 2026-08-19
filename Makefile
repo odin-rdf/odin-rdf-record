@@ -7,8 +7,10 @@ COLL := -collection:rdf=../odin-rdf-parser
 
 # Every package with tests. Grows with the implementation; tests/readme joins
 # it when the README carries its first example. tests/tool drives the built
-# binary, so the test target depends on tool.
-PKGS := record tests/tool
+# binary, so the test target depends on tool; tests/proof runs the Python
+# verifier (tests/verify/rdflog_verify.py) against the fault corpus, so the
+# test target requires python3 and says so rather than failing cryptically.
+PKGS := record tests/tool tests/proof tests/scale
 
 # There is no Term_ID width matrix here, deliberately. The family's dual-width
 # convention exists because odin-rdf-store makes ID width a build-time choice
@@ -32,6 +34,8 @@ help: ## Show available targets
 TEST_FLAGS := -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true $(COLL)
 
 test: tool ## Run the test suite
+	@command -v python3 >/dev/null 2>&1 || \
+		{ echo "error: python3 is required — the cross-implementation suite runs tests/verify/rdflog_verify.py"; exit 1; }
 	@for pkg in $(PKGS); do \
 		echo "-- $$pkg --"; \
 		odin test $$pkg $(TEST_FLAGS) || exit 1; \
