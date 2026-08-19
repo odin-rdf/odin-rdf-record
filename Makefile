@@ -1,0 +1,46 @@
+# Odin source collections. The parser is a sibling checkout rather than a
+# vendored copy, so it is reached through a collection instead of a relative
+# path -- `import "rdf:rdf"` for the data model and the format packages.
+# ols.json declares the same collection so the language server resolves what
+# the compiler does.
+COLL := -collection:rdf=../odin-rdf-parser
+
+# Every package with tests. Grows with the implementation; tests/readme joins
+# it when the README carries its first example.
+PKGS := record
+
+# There is no Term_ID width matrix here, deliberately. The family's dual-width
+# convention exists because odin-rdf-store makes ID width a build-time choice
+# (STORE-A-0001). This store fixes both of its widths by design -- u64 term IDs
+# on disk (doc/design/api.md par. 3.5), u32 resident with an inline range
+# (par. 3) -- because the inline encoding is frozen at first write (par. 3.3)
+# and a build knob would put that freeze at the mercy of a flag.
+
+.PHONY: all help test check clean
+
+all: test
+
+# The description of a target is the `##` on its own recipe line, which is what
+# help greps for -- prose above a target is for a reader of this file, not the
+# listing. A target with no `##` is internal and stays out of it.
+help: ## Show available targets
+	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# The test runner tracks allocations per test but only warns about leaks and bad
+# frees by default, which a passing build hides. Promote them to failures.
+TEST_FLAGS := -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true $(COLL)
+
+test: ## Run the test suite
+	@for pkg in $(PKGS); do \
+		echo "-- $$pkg --"; \
+		odin test $$pkg $(TEST_FLAGS) || exit 1; \
+	done
+
+check: ## Vet every package
+	@for pkg in $(PKGS); do \
+		echo "-- $$pkg --"; \
+		odin check $$pkg -no-entry-point -vet -strict-style $(COLL) || exit 1; \
+	done
+
+clean: ## Remove build/
+	rm -rf build
