@@ -8,10 +8,19 @@
 //
 // The design is specified in doc/design/ — log.md for the on-disk
 // format, api.md for the resident layout and the pattern-matching API,
-// architecture.md for the premises both inherit — and the decisions
-// still open before the first record is written are the phase-0 ADRs
-// under .metis/adrs/. This package is intentionally empty until those
-// are settled: several of them (the inline-term encoding above all,
-// api.md par. 3.3) are frozen at first write and cannot be revisited
-// by a later version.
+// architecture.md for the premises both inherit — and the phase-0
+// decisions are the ADRs under .metis/adrs/, all decided before the
+// first byte of code because several (the inline-term encoding above
+// all, RECORD-A-0001) are frozen at first write.
+//
+// The package is one deliberate unit rather than a log subpackage and
+// a store subpackage: consumers import `record` and nothing else, and
+// the log and the resident store are two halves of one design — the
+// log determines everything resident, so an internal package boundary
+// would only force internals into a public surface. Files map to the
+// initiative's tasks: encode.odin and crc32c.odin are the pure
+// encoding layer (RECORD-T-0001); the writer, the open path, replay,
+// and the resident structures follow as their tasks land. The CLI
+// (verify, dump, head) will live in tool/ at the repository root,
+// following the family's root-level main-package pattern.
 package record

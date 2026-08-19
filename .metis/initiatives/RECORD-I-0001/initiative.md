@@ -4,14 +4,14 @@ level: initiative
 title: "The log of record: format, write path, verification, tooling"
 short_code: "RECORD-I-0001"
 created_at: 2026-08-19T17:15:24.558917+00:00
-updated_at: 2026-08-19T17:20:59.274731+00:00
+updated_at: 2026-08-19T17:30:05.356408+00:00
 parent: RECORD-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/decompose"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -88,14 +88,20 @@ document (with an ADR if it changes a decision), never by quietly diverging.
 What the document leaves to the implementation, to be decided in the first
 task and recorded:
 
-- **Package layout**: whether the log lives inside `record` or as a
-  `record/log` subpackage, and where the CLI tool sits (a `cmd/` or `tool/`
-  main package — the family has both patterns; pick one and say why).
-- **CRC-32C availability**: `core:hash` must be checked for Castagnoli
-  support; if only IEEE is available, the polynomial table is ~30 lines and
-  belongs beside the framing code with a test vector from the spec.
-- **SHA-256** via `core:crypto` — verify the streaming interface fits the
-  hash-the-body-prefix rule in §6.
+- **Package layout** — *decided in RECORD-T-0001*: one public package,
+  `record/`, no log subpackage. Consumers import `record` and nothing
+  else, and the log and the resident store are two halves of one design —
+  the log determines everything resident — so an internal boundary would
+  only force internals into a public surface. The CLI lives in `tool/` at
+  the repository root, the family's root-level main-package pattern
+  (odin-rdf-store's `bench/`, `conformance/`), binary `build/record`.
+- **CRC-32C availability** — *resolved in RECORD-T-0001*: `core:hash`
+  carries only the IEEE polynomial, so the Castagnoli table lives in
+  `record/crc32c.odin` beside the framing code, asserted against the
+  published check value (`crc32c("123456789") == 0xE3069283`).
+- **SHA-256** — *resolved in RECORD-T-0001*: `core:crypto/sha2`'s
+  `Context_256`/`update`/`final` fits the hash-the-body-prefix rule of §6
+  directly.
 - **Typed errors** for the verification taxonomy, in the family's
   procedure-set style.
 - **The consumer interface** for replay — narrow enough that the next
