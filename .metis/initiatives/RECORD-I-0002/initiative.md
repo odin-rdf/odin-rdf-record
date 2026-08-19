@@ -189,3 +189,60 @@ Exit: `make test` green; a store that boots from its own log, serves
 epoch-pinned reads through snapshots, and resumes its writer — with boot
 measured under one second at ISMS scale and the resident footprint
 recorded.
+
+## Session handoff — 2026-08-19, before implementation begins
+
+Context that existed only in the decomposition session, recorded so the
+implementing session does not rediscover it:
+
+**1. The environment note is unowned — now assigned to T-0011.** It fell
+between the initiatives: RECORD-I-0001's Detailed Design listed "the
+environment note's v1 content" as a decision to make and record, and no
+task recorded it — the tests write a placeholder `{"format":1}`. And
+`log.md` §7.1 specifies *when* it is written: at startup, when any of the
+environment differs from the last such record — which makes it
+`store_open`'s job. T-0011 has gained the acceptance criterion. The v1
+content decision (format version; the RECORD-A-0002 derived-facts regime
+declaration — "no reasoner, none logged" — so the first real log is
+self-describing) should be made there and recorded in the task, amending
+`log.md` §5.5 if it constrains the payload.
+
+**2. The test-scaffolding map, and what T-0011's cross-restart sweep
+needs.** Three fakes exist, deliberately different: `writer_test.odin`'s
+`Fake_FS` (file-private, *operation budget* crash model, synced/linked
+durable views via `fake_durable`); `fakefs_test.odin`'s `OFS`
+(package-private, byte-level, read/truncate/remove — no budget, no
+durability model); `tests/scale`'s `Mem_FS` (throughput only). The
+cross-restart sweep needs budget + durable views + the read side in one
+fake. T-0003 deferred exactly this composition because none existed. The
+options, in preference order from the session: (a) extend `OFS` with a
+budget and synced/linked tracking, making it the one full-fidelity fake
+and eventually retiring `Fake_FS` into it; (b) lift `Fake_FS` to
+package-private and add the read side. Either way, the durable-view
+semantics to preserve: nothing if the directory entry never synced,
+otherwise the synced bytes plus optionally half of the unsynced tail.
+
+**3. The consumer-failure idiom, and where T-0007's error types live.**
+The seam reports a refusing consumer as `.Consumer_Abort` only; the
+consumer carries its own diagnosis — the tool's `Dumper.fail` field is
+the established precedent (set the detail, return false, report after
+the abort). T-0007's retract-of-non-live and duplicate-assert can either
+follow that idiom (a builder-owned error enum behind `.Consumer_Abort`)
+or extend `Open_Error` the way the replay-only verdicts did. Session
+lean: **builder-owned**. The replay-only `Open_Error` members judge what
+any conforming log must satisfy; live-quad discipline is a *this-store*
+semantic (`log.md` §8 calls it a replay error, but a foreign consumer
+may legitimately tolerate it), and the CLI's verdict surface should not
+grow store-internal cases. Decide in T-0007 and record.
+
+**4. Toolchain notes that cost compile round-trips.** This machine's
+Odin (homebrew 2026-08): `core:os` is the os2-shaped API —
+`read_entire_file_from_path(path, allocator) -> (data, err)`,
+`process_exec(Process_Desc{command = []string{...}}, allocator)`,
+`os.to_writer(os.stdout)`, `os.open(path, {.Write, .Append})`.
+Enumerated arrays over `Op_Kind` need `#sparse` (its values are
+non-contiguous) — the tool uses switch procedures instead. And the
+reason `tests/scale` generates through `Mem_FS` and flushes whole files
+to disk afterwards: F_FULLFSYNC on darwin costs ~5–20 ms per sync, so a
+per-epoch fsync at 2×10⁵ epochs would run for an hour — any test that
+writes many epochs through the real posix ops is a bug in the test.

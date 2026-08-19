@@ -60,6 +60,15 @@ HEAD stays advisory, exactly as `log.md` §2 demands.
       operation-budget sweep, booted by `store_open`, resumes and
       commits further epochs; the combined log verifies clean and
       replays to the union of both runs' acknowledged epochs.
+- [ ] The environment note written at startup per `log.md` §7.1: after
+      resume, `store_open` compares the current environment against the
+      last note in the log and appends one only when it differs — with
+      the **v1 note content decided and recorded here** (format version;
+      the RECORD-A-0002 derived-facts regime declaration, "no reasoner,
+      none logged" — so the first real log is self-describing), amending
+      `log.md` §5.5 if the decision constrains the payload. This was
+      RECORD-I-0001's one unrecorded decision; see the initiative's
+      session-handoff note.
 - [ ] `make check` and `make test` green.
 
 ## Implementation Notes
