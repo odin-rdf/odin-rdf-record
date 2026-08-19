@@ -220,10 +220,13 @@ script :: proc(fs: ^Fake_FS, target: int) -> (acked: [dynamic]u64) {
 	return
 }
 
-// scan_epochs is the frame-scan stand-in for the open path
-// (RECORD-T-0003): walk the durable view segment by segment, stop at
-// the first anomaly, and collect the epochs of every intact commit.
-// Every recovered record must carry a known kind and a good hash.
+// scan_epochs is the writer test's own frame-level reader: walk the
+// durable view segment by segment, stop at the first anomaly, and
+// collect the epochs of every intact commit. It stays deliberately
+// independent of the real open path (verify/recover, RECORD-T-0003)
+// so the write-path sweep does not certify the writer through the
+// reader shipped beside it; the systematic cross-check of writer
+// crash states against the open path is RECORD-T-0006's fault corpus.
 @(private = "file")
 scan_epochs :: proc(t: ^testing.T, fs: ^Fake_FS, half: bool) -> (epochs: [dynamic]u64) {
 	for seg := u32(1); ; seg += 1 {

@@ -44,11 +44,23 @@ SEGMENT_TARGET_SIZE :: 64 * 1024 * 1024
 // stores an index.
 File_Handle :: distinct uintptr
 
-// File_Ops is the writer's entire view of the filesystem, injectable
-// so crash tests can cut between any two operations (RECORD-T-0002).
+// Read_Status is what File_Ops.read reports: a file that is absent
+// ends the open path's segment walk, a file that exists but cannot be
+// read halts it — the two must never be conflated, because conflating
+// them would silently shorten the log (RECORD-T-0003).
+Read_Status :: enum {
+	Ok,
+	Absent,
+	Error,
+}
+
+// File_Ops is the log's entire view of the filesystem, injectable so
+// crash and fault tests can cut between any two operations or hand the
+// open path an injured file (RECORD-T-0002, RECORD-T-0003). The writer
+// uses the append side; the open path uses read, truncate, and remove.
 // Path arguments are borrowed for the call — an implementation that
-// retains one clones it. Every proc reports plain success; the writer
-// maps failures to its own error and stops.
+// retains one clones it. Every proc reports plain success; the callers
+// map failures to their own errors and stop.
 File_Ops :: struct {
 	data:     rawptr,
 	// create opens a new file for append; it must refuse a path that
@@ -72,6 +84,18 @@ File_Ops :: struct {
 	// put_file replaces a small advisory file wholesale (HEAD). No
 	// durability is promised or wanted; no read path trusts it.
 	put_file: proc(data: rawptr, path: string, content: []byte) -> bool,
+	// read returns a whole file, allocated from `allocator` and owned
+	// by the caller. Absent and Error are distinct on purpose: the
+	// segment walk ends at the first absent file and halts on an
+	// unreadable one.
+	read:     proc(data: rawptr, path: string, allocator: runtime.Allocator) -> (contents: []byte, status: Read_Status),
+	// truncate cuts the file to `size` bytes and makes the cut durable
+	// (fsync) — torn-tail recovery's one mutation (log.md par. 7.2).
+	truncate: proc(data: rawptr, path: string, size: int) -> bool,
+	// remove unlinks a file; the caller syncs the directory. Recovery
+	// uses it for the one file that is safe to remove: a final segment
+	// whose header never became durable.
+	remove:   proc(data: rawptr, path: string) -> bool,
 }
 
 // Writer_Error is every way an append can refuse. The encoding cases

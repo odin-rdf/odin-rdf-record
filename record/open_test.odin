@@ -1,0 +1,684 @@
+package record
+
+import "base:runtime"
+import "core:strings"
+import "core:testing"
+
+// The open path's tests injure logs the writer produced and check the
+// verdict — RECORD-T-0003's fault-injection suite. The fake filesystem
+// here is byte-level and deliberately simple: crash states are made by
+// truncating and editing file contents directly, which is exactly the
+// space of states a real crash or a real tamperer can produce. The
+// writer's own crash model (the operation budget in writer_test.odin)
+// already proves what reaches the disk; these tests prove what the
+// open path makes of it.
+
+@(private = "file")
+OFile :: struct {
+	name: string, // cloned
+	data: [dynamic]u8,
+	gone: bool,
+}
+
+@(private = "file")
+OFS :: struct {
+	files:     [dynamic]OFile,
+	head:      [dynamic]u8, // last put_file content (HEAD)
+	fail_read: string,      // path whose read reports .Error; "" for none
+	truncates: int,
+	removes:   int,
+	dir_syncs: int,
+}
+
+@(private = "file")
+ofs_ops :: proc(fs: ^OFS) -> File_Ops {
+	return {
+		data     = fs,
+		create   = ofs_create,
+		append   = ofs_append,
+		sync     = ofs_sync,
+		close    = ofs_close,
+		sync_dir = ofs_sync_dir,
+		put_file = ofs_put_file,
+		read     = ofs_read,
+		truncate = ofs_truncate,
+		remove   = ofs_remove,
+	}
+}
+
+@(private = "file")
+ofs_destroy :: proc(fs: ^OFS) {
+	for &f in fs.files {
+		delete(f.name)
+		delete(f.data)
+	}
+	delete(fs.files)
+	delete(fs.head)
+	fs^ = {}
+}
+
+// ofs_find returns the file whatever its `gone` flag says, so a test
+// can restore what recovery removed.
+@(private = "file")
+ofs_find :: proc(fs: ^OFS, name: string) -> ^OFile {
+	for &f in fs.files {
+		if f.name == name {
+			return &f
+		}
+	}
+	return nil
+}
+
+@(private = "file")
+ofs_seed :: proc(fs: ^OFS, name: string, data: []byte) {
+	f := OFile {
+		name = strings.clone(name),
+	}
+	append(&f.data, ..data)
+	append(&fs.files, f)
+}
+
+@(private = "file")
+ofs_set :: proc(f: ^OFile, data: []byte) {
+	f.gone = false
+	resize(&f.data, 0)
+	append(&f.data, ..data)
+}
+
+@(private = "file")
+ofs_create :: proc(data: rawptr, path: string) -> (File_Handle, bool) {
+	fs := (^OFS)(data)
+	for f in fs.files {
+		if f.name == path && !f.gone {
+			return 0, false
+		}
+	}
+	append(&fs.files, OFile{name = strings.clone(path)})
+	return File_Handle(len(fs.files)), true
+}
+
+@(private = "file")
+ofs_append :: proc(data: rawptr, f: File_Handle, bytes: []byte) -> bool {
+	fs := (^OFS)(data)
+	append(&fs.files[int(f)-1].data, ..bytes)
+	return true
+}
+
+@(private = "file")
+ofs_sync :: proc(data: rawptr, f: File_Handle) -> bool {
+	_ = data
+	_ = f
+	return true
+}
+
+@(private = "file")
+ofs_close :: proc(data: rawptr, f: File_Handle) -> bool {
+	_ = data
+	_ = f
+	return true
+}
+
+@(private = "file")
+ofs_sync_dir :: proc(data: rawptr, dir: string) -> bool {
+	fs := (^OFS)(data)
+	_ = dir
+	fs.dir_syncs += 1
+	return true
+}
+
+@(private = "file")
+ofs_put_file :: proc(data: rawptr, path: string, content: []byte) -> bool {
+	fs := (^OFS)(data)
+	_ = path
+	clear(&fs.head)
+	append(&fs.head, ..content)
+	return true
+}
+
+@(private = "file")
+ofs_read :: proc(data: rawptr, path: string, allocator: runtime.Allocator) -> (contents: []byte, status: Read_Status) {
+	fs := (^OFS)(data)
+	if fs.fail_read == path {
+		return nil, .Error
+	}
+	for &f in fs.files {
+		if f.name == path && !f.gone {
+			contents = make([]byte, len(f.data), allocator)
+			copy(contents, f.data[:])
+			return contents, .Ok
+		}
+	}
+	return nil, .Absent
+}
+
+@(private = "file")
+ofs_truncate :: proc(data: rawptr, path: string, size: int) -> bool {
+	fs := (^OFS)(data)
+	for &f in fs.files {
+		if f.name == path && !f.gone {
+			if size > len(f.data) {
+				return false
+			}
+			resize(&f.data, size)
+			fs.truncates += 1
+			return true
+		}
+	}
+	return false
+}
+
+@(private = "file")
+ofs_remove :: proc(data: rawptr, path: string) -> bool {
+	fs := (^OFS)(data)
+	for &f in fs.files {
+		if f.name == path && !f.gone {
+			f.gone = true
+			fs.removes += 1
+			return true
+		}
+	}
+	return false
+}
+
+@(private = "file")
+OWALL :: u64(1_700_000_000_000_000_000)
+
+// OState is the writer's own view at the end of obuild, which
+// Verify_Result must reproduce exactly — the open path is what hands a
+// resuming writer its state back (RECORD-T-0004).
+@(private = "file")
+OState :: struct {
+	head:          [HASH_SIZE]u8,
+	last_epoch:    u64,
+	seg_no:        u32,
+	seg_size:      int,
+	next_term_id:  u64,
+	fact_count:    u32,
+	epoch_records: u64,
+}
+
+// obuild produces the canonical log to injure: sealed segment 1
+// (commit, note, seal), sealed segment 2 (commit, seal), and an open
+// segment 3 holding two commits — epochs 1..4, three terms, four
+// asserts.
+@(private = "file")
+obuild :: proc(t: ^testing.T, fs: ^OFS) -> (st: OState) {
+	w, err := writer_create("store", ofs_ops(fs), SEGMENT_TARGET_SIZE)
+	defer writer_destroy(&w)
+	testing.expect_value(t, err, Writer_Error.None)
+
+	terms1 := [2]Term_Def{
+		{id = 1, enc = transmute([]u8)string("\x01http://example.org/a")},
+		{id = 2, enc = transmute([]u8)string("\x01http://example.org/b")},
+	}
+	five, _ := inline_integer(5)
+	ops1 := [2]Fact_Op{
+		{op = .Assert, s = 1, p = 2, o = five, g = 1},
+		{op = .Assert, s = 2, p = 2, o = 1, g = 1},
+	}
+	testing.expect_value(t, writer_commit(&w, {epoch = 1, wall = OWALL, terms = terms1[:], ops = ops1[:]}), Writer_Error.None)
+	testing.expect_value(t, writer_note(&w, transmute([]u8)string(`{"format":1}`)), Writer_Error.None)
+	testing.expect_value(t, writer_seal(&w), Writer_Error.None)
+
+	terms2 := [1]Term_Def{{id = 3, enc = transmute([]u8)string("\x01http://example.org/c")}}
+	ops2 := [2]Fact_Op{
+		{op = .Assert, s = 3, p = 2, o = 1, g = 1},
+		{op = .Retract, s = 1, p = 2, o = five, g = 1},
+	}
+	testing.expect_value(t, writer_commit(&w, {epoch = 2, wall = OWALL + 1, terms = terms2[:], ops = ops2[:]}), Writer_Error.None)
+	testing.expect_value(t, writer_seal(&w), Writer_Error.None)
+
+	ops3 := [1]Fact_Op{{op = .Assert, s = 2, p = 2, o = 3, g = 1}}
+	testing.expect_value(t, writer_commit(&w, {epoch = 3, wall = OWALL + 2, ops = ops3[:]}), Writer_Error.None)
+	ops4 := [1]Fact_Op{{op = .Retract, s = 2, p = 2, o = 3, g = 1}}
+	testing.expect_value(t, writer_commit(&w, {epoch = 4, wall = OWALL + 3, ops = ops4[:]}), Writer_Error.None)
+
+	return OState{
+		head          = w.head,
+		last_epoch    = w.prev_epoch,
+		seg_no        = w.seg_no,
+		seg_size      = w.seg_size,
+		next_term_id  = w.next_term_id,
+		fact_count    = w.fact_count,
+		epoch_records = w.epoch_records,
+	}
+}
+
+// record_offsets scans one segment's frames and returns each record's
+// start offset.
+@(private = "file")
+record_offsets :: proc(data: []byte) -> (offs: [dynamic]int) {
+	offset := HEADER_SIZE
+	rest := data[HEADER_SIZE:]
+	for {
+		body, next_rest, status := frame_next(rest)
+		if status != .Ok {
+			return
+		}
+		append(&offs, offset)
+		offset += FRAME_OVERHEAD + len(body)
+		rest = next_rest
+	}
+}
+
+@(private = "file")
+clone_bytes :: proc(data: []byte) -> []byte {
+	out := make([]byte, len(data))
+	copy(out, data)
+	return out
+}
+
+@(test)
+test_open_verify_clean :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	st := obuild(t, &fs)
+
+	r, tear, err := verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.None)
+	testing.expect_value(t, tear.kind, Tear_Kind.None)
+
+	// The result is the writer's state, recomputed from bytes alone.
+	testing.expect(t, r.head == st.head, "verify returns the writer's head hash")
+	testing.expect_value(t, r.last_epoch, st.last_epoch)
+	testing.expect_value(t, r.segments, st.seg_no)
+	testing.expect_value(t, r.next_term_id, st.next_term_id)
+	testing.expect_value(t, r.fact_count, st.fact_count)
+	testing.expect_value(t, r.tail_size, st.seg_size)
+	testing.expect_value(t, r.tail_records, st.epoch_records)
+	testing.expect_value(t, r.tail_sealed, false)
+
+	// verify is read-only, whatever it finds.
+	testing.expect_value(t, fs.truncates, 0)
+	testing.expect_value(t, fs.removes, 0)
+}
+
+@(test)
+test_open_tail_sweep :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	_ = obuild(t, &fs)
+
+	f := ofs_find(&fs, "store/000003.rlog")
+	original := clone_bytes(f.data[:])
+	defer delete(original)
+	offs := record_offsets(original)
+	defer delete(offs)
+	testing.expect_value(t, len(offs), 2) // commits 3 and 4
+
+	// Truncate the open segment at every byte offset of its record
+	// region and recover: the file must come back cut to exactly the
+	// last durable record, and the recovered log must verify clean.
+	for cut in offs[0] ..< len(original) {
+		ofs_set(f, original[:cut])
+
+		boundary := offs[0]
+		epoch := u64(2)
+		if cut >= offs[1] {
+			boundary = offs[1]
+			epoch = 3
+		}
+
+		r, tear, err := recover("store", ofs_ops(&fs))
+		testing.expect_value(t, err, Open_Error.None)
+		if cut == boundary {
+			// The cut landed on a record boundary: a shorter but
+			// complete log, nothing to repair.
+			testing.expect_value(t, tear.kind, Tear_Kind.None)
+		} else {
+			testing.expect_value(t, tear.kind, Tear_Kind.Tail)
+			testing.expect_value(t, tear.segment, u32(3))
+			testing.expect_value(t, tear.offset, boundary)
+			testing.expect_value(t, tear.lost, cut-boundary)
+		}
+		testing.expect_value(t, len(f.data), boundary)
+		testing.expect_value(t, r.last_epoch, epoch)
+		testing.expect_value(t, r.tail_size, boundary)
+
+		r2, tear2, err2 := verify("store", ofs_ops(&fs))
+		testing.expect_value(t, err2, Open_Error.None)
+		testing.expect_value(t, tear2.kind, Tear_Kind.None)
+		testing.expect_value(t, r2.last_epoch, epoch)
+	}
+
+	ofs_set(f, original)
+	r, _, err := verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.None)
+	testing.expect_value(t, r.last_epoch, u64(4))
+}
+
+@(test)
+test_open_sealed_bitflip :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	_ = obuild(t, &fs)
+
+	// One flipped bit anywhere in a sealed segment halts verification
+	// — never clean, never torn. The header's fixed fields fail their
+	// CRC or an equality check, the base hash fails the equality that
+	// replaces its CRC, and every record body — the seal included — is
+	// under its frame CRC.
+	f := ofs_find(&fs, "store/000001.rlog")
+	for i in 0 ..< len(f.data) {
+		for bit in ([2]u8{0x01, 0x80}) {
+			f.data[i] ~= bit
+			_, tear, err := verify("store", ofs_ops(&fs))
+			testing.expect(t, err != .None && err != .Torn, "a flipped bit in a sealed segment halts")
+			testing.expect_value(t, tear.kind, Tear_Kind.None)
+			f.data[i] ~= bit
+		}
+	}
+
+	_, _, err := verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.None)
+	testing.expect_value(t, fs.truncates, 0)
+	testing.expect_value(t, fs.removes, 0)
+}
+
+@(test)
+test_open_position_rule :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	_ = obuild(t, &fs)
+
+	f := ofs_find(&fs, "store/000003.rlog")
+	original := clone_bytes(f.data[:])
+	defer delete(original)
+	offs := record_offsets(original)
+	defer delete(offs)
+
+	// A CRC failure before the tail of the open segment is corruption,
+	// not a tear: a valid record follows the damaged one, and a
+	// fail-stop writer cannot have produced that. recover must halt
+	// and touch nothing — truncating here would destroy evidence.
+	f.data[offs[0]+FRAME_OVERHEAD+5] ~= 0x01
+	_, tear, err := recover("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.Corrupt)
+	testing.expect_value(t, tear.kind, Tear_Kind.None)
+	testing.expect_value(t, fs.truncates, 0)
+	ofs_set(f, original)
+
+	// The same damage in the final record is the torn tail: the one
+	// position where truncation is recovery rather than destruction.
+	f.data[offs[1]+FRAME_OVERHEAD+5] ~= 0x01
+	r, tear2, err2 := recover("store", ofs_ops(&fs))
+	testing.expect_value(t, err2, Open_Error.None)
+	testing.expect_value(t, tear2.kind, Tear_Kind.Tail)
+	testing.expect_value(t, tear2.offset, offs[1])
+	testing.expect_value(t, fs.truncates, 1)
+	testing.expect_value(t, len(f.data), offs[1])
+	testing.expect_value(t, r.last_epoch, u64(3))
+	ofs_set(f, original)
+
+	// And in a sealed segment, the same damage to the final record is
+	// still corruption: position means position in the open segment,
+	// not position in a file.
+	f1 := ofs_find(&fs, "store/000001.rlog")
+	saved := clone_bytes(f1.data[:])
+	defer delete(saved)
+	offs1 := record_offsets(saved)
+	defer delete(offs1)
+	f1.data[offs1[len(offs1)-1]+FRAME_OVERHEAD+5] ~= 0x01
+	_, _, err3 := recover("store", ofs_ops(&fs))
+	testing.expect_value(t, err3, Open_Error.Corrupt)
+	testing.expect_value(t, fs.truncates, 1) // unchanged
+	ofs_set(f1, saved)
+}
+
+@(test)
+test_open_torn_shapes :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	_ = obuild(t, &fs)
+
+	f := ofs_find(&fs, "store/000003.rlog")
+	original := clone_bytes(f.data[:])
+	defer delete(original)
+	end := len(original)
+
+	// Each shape of log.md par. 7.2's taxonomy, appended to the open
+	// segment: a zero length (a zero-filled block is not an empty
+	// record), an oversized length, a body the file cannot hold, and a
+	// partial frame header. All torn; all recover by truncation to the
+	// last durable record.
+	zero_len := [8]u8{0, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD}
+	oversized := [8]u8{0x04, 0x00, 0x00, 0x01, 0xAA, 0xBB, 0xCC, 0xDD} // MAX_RECORD_SIZE + 1
+	short_body := [14]u8{0, 0, 0, 100, 0xAA, 0xBB, 0xCC, 0xDD, 1, 2, 3, 4, 5, 6}
+	stray := [3]u8{0x01, 0x02, 0x03}
+	shapes := [4][]u8{zero_len[:], oversized[:], short_body[:], stray[:]}
+
+	for shape in shapes {
+		ofs_set(f, original)
+		append(&f.data, ..shape)
+
+		_, tear, err := verify("store", ofs_ops(&fs))
+		testing.expect_value(t, err, Open_Error.Torn)
+		testing.expect_value(t, tear.kind, Tear_Kind.Tail)
+		testing.expect_value(t, tear.offset, end)
+		testing.expect_value(t, tear.lost, len(shape))
+
+		r, _, rerr := recover("store", ofs_ops(&fs))
+		testing.expect_value(t, rerr, Open_Error.None)
+		testing.expect_value(t, len(f.data), end)
+		testing.expect_value(t, r.last_epoch, u64(4))
+	}
+
+	// An unknown record kind under a valid CRC is never torn: the
+	// bytes were fully written, just not by our writer. It halts in
+	// the open segment's final position and in a sealed segment alike.
+	unknown: [dynamic]u8
+	defer delete(unknown)
+	frame_append(&unknown, []byte{0x7F, 0xAA, 0xBB})
+
+	ofs_set(f, original)
+	append(&f.data, ..unknown[:])
+	truncates_before := fs.truncates
+	_, _, err := recover("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.Corrupt)
+	testing.expect_value(t, fs.truncates, truncates_before)
+	ofs_set(f, original)
+
+	f1 := ofs_find(&fs, "store/000001.rlog")
+	saved := clone_bytes(f1.data[:])
+	defer delete(saved)
+	append(&f1.data, ..unknown[:])
+	_, _, err2 := verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err2, Open_Error.Corrupt)
+	ofs_set(f1, saved)
+}
+
+@(test)
+test_open_husk :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+
+	head: [HASH_SIZE]u8
+	{
+		w, err := writer_create("store", ofs_ops(&fs), SEGMENT_TARGET_SIZE)
+		defer writer_destroy(&w)
+		testing.expect_value(t, err, Writer_Error.None)
+		terms := [1]Term_Def{{id = 1, enc = transmute([]u8)string("\x01http://example.org/a")}}
+		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 1, o = 1, g = 1}}
+		testing.expect_value(t, writer_commit(&w, {epoch = 1, wall = OWALL, terms = terms[:], ops = ops[:]}), Writer_Error.None)
+		testing.expect_value(t, writer_seal(&w), Writer_Error.None)
+		head = w.head
+	}
+
+	// Baseline: an empty open segment after a seal is a clean store.
+	r0, tear0, err0 := verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err0, Open_Error.None)
+	testing.expect_value(t, tear0.kind, Tear_Kind.None)
+	testing.expect_value(t, r0.segments, u32(2))
+	testing.expect_value(t, r0.tail_size, HEADER_SIZE)
+	testing.expect_value(t, r0.tail_records, u64(0))
+	testing.expect_value(t, r0.tail_sealed, false)
+	testing.expect(t, r0.head == head, "the head crosses the rotation unchanged")
+
+	f2 := ofs_find(&fs, "store/000002.rlog")
+	original := clone_bytes(f2.data[:])
+	defer delete(original)
+
+	// The rotation-crash husk: the final segment's header never became
+	// durable. A truncated prefix of the real header, or a full 64
+	// bytes of garbage — recovery removes the file, and the log ends
+	// at the sealed segment before it.
+	garbage: [HEADER_SIZE]u8
+	for &b in garbage {
+		b = 0xAA
+	}
+	husks := [4][]u8{original[:0], original[:1], original[:63], garbage[:]}
+	for husk in husks {
+		ofs_set(f2, husk)
+
+		r, tear, err := verify("store", ofs_ops(&fs))
+		testing.expect_value(t, err, Open_Error.Torn)
+		testing.expect_value(t, tear.kind, Tear_Kind.Header)
+		testing.expect_value(t, tear.segment, u32(2))
+		testing.expect_value(t, tear.lost, len(husk))
+		testing.expect_value(t, r.segments, u32(1))
+		testing.expect_value(t, r.tail_sealed, true)
+		testing.expect_value(t, r.last_epoch, u64(1))
+
+		removes_before := fs.removes
+		r2, tear2, err2 := recover("store", ofs_ops(&fs))
+		testing.expect_value(t, err2, Open_Error.None)
+		testing.expect_value(t, tear2.kind, Tear_Kind.Header)
+		testing.expect_value(t, fs.removes, removes_before+1)
+		testing.expect_value(t, r2.segments, u32(1))
+
+		r3, _, err3 := verify("store", ofs_ops(&fs))
+		testing.expect_value(t, err3, Open_Error.None)
+		testing.expect_value(t, r3.segments, u32(1))
+		testing.expect_value(t, r3.tail_sealed, true)
+		testing.expect_value(t, r3.last_epoch, u64(1))
+	}
+	ofs_set(f2, original)
+
+	// A valid header carrying an unknown version is a future format,
+	// never a husk: it halts, and recovery removes nothing.
+	future: [HEADER_SIZE]u8
+	header_encode(Segment_Header{version = 2, segment = 2, first_epoch = 2, first_fact_id = 1, base_hash = head}, &future)
+	ofs_set(f2, future[:])
+	removes_before := fs.removes
+	_, tearv, errv := recover("store", ofs_ops(&fs))
+	testing.expect_value(t, errv, Open_Error.Bad_Header)
+	testing.expect_value(t, tearv.kind, Tear_Kind.None)
+	testing.expect_value(t, fs.removes, removes_before)
+	ofs_set(f2, original)
+
+	// A husk at segment 1 is a store whose creation crashed: recovery
+	// removes it and reports that no store exists.
+	fs2: OFS
+	defer ofs_destroy(&fs2)
+	ofs_seed(&fs2, "store/000001.rlog", transmute([]u8)string("RDF"))
+	_, tear1, err1 := verify("store", ofs_ops(&fs2))
+	testing.expect_value(t, err1, Open_Error.Torn)
+	testing.expect_value(t, tear1.kind, Tear_Kind.Header)
+	testing.expect_value(t, tear1.segment, u32(1))
+	_, _, err2 := recover("store", ofs_ops(&fs2))
+	testing.expect_value(t, err2, Open_Error.No_Store)
+	testing.expect_value(t, fs2.removes, 1)
+
+	// And a directory with no segments at all was never a store.
+	fs3: OFS
+	defer ofs_destroy(&fs3)
+	_, _, err3 := verify("store", ofs_ops(&fs3))
+	testing.expect_value(t, err3, Open_Error.No_Store)
+}
+
+@(test)
+test_open_verdicts :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	st := obuild(t, &fs)
+
+	f2 := ofs_find(&fs, "store/000002.rlog")
+	f3 := ofs_find(&fs, "store/000003.rlog")
+	saved2 := clone_bytes(f2.data[:])
+	defer delete(saved2)
+	saved3 := clone_bytes(f3.data[:])
+	defer delete(saved3)
+
+	// An unreadable segment halts as IO, distinct from an absent one.
+	fs.fail_read = "store/000002.rlog"
+	_, _, err := verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.IO_Read)
+	fs.fail_read = ""
+
+	// The base hash is checked by equality, not by CRC — flipping it
+	// leaves the header CRC valid and still fails the open.
+	f2.data[40] ~= 0x01
+	_, _, err = verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.Base_Hash_Mismatch)
+	ofs_set(f2, saved2)
+
+	// The header's positional fields are equality-checked against the
+	// walk: a re-encoded header with a valid CRC and a wrong segment
+	// number, first epoch, or first fact ID fails.
+	hdr, herr := header_decode(saved2)
+	testing.expect_value(t, herr, Decode_Error.None)
+	tampered := [3]Segment_Header{hdr, hdr, hdr}
+	tampered[0].segment = 9
+	tampered[1].first_epoch = 7
+	tampered[2].first_fact_id = 9
+	for tam in tampered {
+		enc: [HEADER_SIZE]u8
+		header_encode(tam, &enc)
+		copy(f2.data[:HEADER_SIZE], enc[:])
+		_, _, herr2 := verify("store", ofs_ops(&fs))
+		testing.expect_value(t, herr2, Open_Error.Bad_Header)
+		ofs_set(f2, saved2)
+	}
+
+	// An epoch gap: a structurally valid, correctly chained commit
+	// whose epoch skips one. Encoded against a lied-about prev_epoch,
+	// because commit_encode itself refuses gaps.
+	gap_ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
+	body, eerr := commit_encode({epoch = 6, wall = OWALL, ops = gap_ops[:]}, st.head, 5, st.next_term_id)
+	testing.expect_value(t, eerr, Encode_Error.None)
+	framed: [dynamic]u8
+	frame_append(&framed, body)
+	append(&f3.data, ..framed[:])
+	delete(framed)
+	delete(body)
+	_, _, err = verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.Epoch_Gap)
+	ofs_set(f3, saved3)
+
+	// A chain break via prev_hash: right epoch, wrong link.
+	bad_prev := st.head
+	bad_prev[0] ~= 0x01
+	body2, eerr2 := commit_encode({epoch = 5, wall = OWALL, ops = gap_ops[:]}, bad_prev, 4, st.next_term_id)
+	testing.expect_value(t, eerr2, Encode_Error.None)
+	framed2: [dynamic]u8
+	frame_append(&framed2, body2)
+	append(&f3.data, ..framed2[:])
+	delete(framed2)
+	delete(body2)
+	_, _, err = verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.Chain_Broken)
+	ofs_set(f3, saved3)
+
+	// A chain break via the hash field: prev_hash matches, but the
+	// recomputed hash does not agree with the embedded one. The frame
+	// is rebuilt around the tampered body so its CRC holds.
+	body3, eerr3 := commit_encode({epoch = 5, wall = OWALL, ops = gap_ops[:]}, st.head, 4, st.next_term_id)
+	testing.expect_value(t, eerr3, Encode_Error.None)
+	body3[len(body3)-1] ~= 0x01
+	framed3: [dynamic]u8
+	frame_append(&framed3, body3)
+	append(&f3.data, ..framed3[:])
+	delete(framed3)
+	delete(body3)
+	_, _, err = verify("store", ofs_ops(&fs))
+	testing.expect_value(t, err, Open_Error.Chain_Broken)
+	ofs_set(f3, saved3)
+
+	// Halting verdicts never mutate, through recover included.
+	testing.expect_value(t, fs.truncates, 0)
+	testing.expect_value(t, fs.removes, 0)
+
+	r, _, errc := verify("store", ofs_ops(&fs))
+	testing.expect_value(t, errc, Open_Error.None)
+	testing.expect_value(t, r.last_epoch, u64(4))
+}

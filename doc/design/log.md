@@ -495,6 +495,18 @@ func Verify(dir string) (head [32]byte, lastEpoch uint64, err error) {
 }
 ```
 
+**Amended 2026-08-19 (RECORD-T-0003).** The implemented verifier checks three
+more equalities than the sketch above, all in the spirit of the base-hash
+rule — redundant header fields verified against state the walk already
+carries: a header's segment number must match its position in the file
+sequence, its first epoch must equal the walk's last epoch + 1, and its
+first fact ID must equal the count of asserts seen so far. The header CRC
+protects these fields against accident but not against an editor who
+recomputes it; the walk's own counters are the stronger check, and since a
+partial reader is invited to trust these fields (§3), the full verifier must
+vouch for them. An independent verifier must perform the same checks to
+agree with ours verdict for verdict.
+
 At 4×10⁵ facts the log is tens of megabytes and SHA-256 runs at 1–2 GB/s on any
 machine with SHA extensions, so a full verification is tens of milliseconds. It
 therefore runs **on every startup**, not as a scheduled job — the same argument
@@ -583,6 +595,24 @@ the two want different responses. The distinguishing evidence is position: a tor
 write can only be the final record. A CRC failure anywhere before the end, or in a
 sealed segment, is corruption or tampering and must **halt**, not truncate. Only a
 failure in the last record of the open segment gets the truncation path.
+
+**Amended 2026-08-19 (RECORD-T-0003), three clarifications from implementation.**
+First, "fewer than 8 bytes remain" is a clean end only when *zero* bytes remain: a
+remainder of 1–7 bytes is a partial frame header and reads as torn — left in place
+it would sit as garbage under the writer's next append. Second, the position rule
+has a sharper edge than "the final record": when a CRC-failed frame's length field
+is plausible and the frame ends *before* the file does, the failure is provably not
+a torn append — the writer is fail-stop and never writes past a failed one — so it
+halts as corruption rather than truncating what follows, which would destroy
+evidence. Third, rotation adds one recoverable artifact the table does not name: a
+*final* segment whose 64 header bytes never became durable (a file shorter than a
+header, or exactly one that fails its magic or CRC) is the crash window between
+`create` and the header's `fsync`. Recovery removes the file — the previous segment
+was sealed before this one could exist, so nothing durable is lost — and surfaces
+the removal the way it surfaces a truncation. A valid header carrying an unknown
+version is a future format, never this husk; and the same damage anywhere non-final
+halts. Relatedly, an unknown record kind under a valid CRC is never torn, in any
+position: the CRC proves the bytes were fully written, just not by our writer.
 
 ### 7.3 What is not protected
 
