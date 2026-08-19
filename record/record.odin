@@ -30,7 +30,8 @@
 // permute.odin is the six sorted permutations, radix-built after
 // replay (RECORD-T-0008); snapshot.odin is publication and the
 // refcounted read handle — Index_Set, Latest/At, the epoch discipline
-// (RECORD-T-0009); the read API follows as its task lands. The CLI
+// (RECORD-T-0009); read.odin is the pattern-matching read API — Match,
+// Iter, Resolve, Bytes, Term (RECORD-T-0010). The CLI
 // (verify, dump, head) lives in tool/ at the repository root,
 // following the family's root-level main-package pattern.
 package record

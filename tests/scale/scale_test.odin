@@ -493,6 +493,47 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 		}
 	}
 	log.infof("permutations: 6 orders over %d facts sorted in %.0f ms", s.n_facts, sort_ms)
+
+	// The read API at scale (RECORD-T-0010): publish, then sampled
+	// patterns — components lifted from real facts across the table —
+	// at the head and at a mid-history epoch, each checked against a
+	// brute-force scan of the whole fact table.
+	rec.store_publish(&s)
+	for epoch in ([2]u32{s.published, s.published / 2}) {
+		snap, serr := rec.store_at(&s, epoch)
+		testing.expect_value(t, serr, rec.Snapshot_Error.None)
+		for probe in 0 ..< 4 {
+			f := rec.store_fact(&s, u32(probe) * (s.n_facts / 4))
+			pats := [4]rec.Pattern{
+				{s = f.s},
+				{p = f.p},
+				{s = f.s, p = f.p, o = f.o},
+				{p = f.p, g = f.g if f.g != 0 else rec.MATCH_DEFAULT_GRAPH},
+			}
+			for p in pats {
+				want := 0
+				for id in u32(0) ..< s.n_facts {
+					c := rec.store_fact(&s, id)
+					if p.s != 0 && c.s != p.s do continue
+					if p.p != 0 && c.p != p.p do continue
+					if p.o != 0 && c.o != p.o do continue
+					if p.g != 0 {
+						pg := u32(0) if p.g == rec.MATCH_DEFAULT_GRAPH else p.g
+						if c.g != pg do continue
+					}
+					if !(c.assert <= epoch && epoch < c.retract) do continue
+					want += 1
+				}
+				got := 0
+				sc := rec.range_iter(rec.snapshot_match(snap, p), {origin = .Any})
+				for _ in rec.scan_next(&sc) {
+					got += 1
+				}
+				testing.expectf(t, got == want, "pattern %v at epoch %d: got %d, want %d", p, epoch, got, want)
+			}
+		}
+		rec.snapshot_release(&snap)
+	}
 }
 
 @(test)

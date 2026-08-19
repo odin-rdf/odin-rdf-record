@@ -896,6 +896,16 @@ func (r Range) Order() Order
 `Range` is a *window*, not a container — the same relationship to a run that a Go
 slice has to its array. `Len()` is arithmetic on four ints.
 
+*Amended 2026-08-20 (RECORD-T-0010): "ID 0 is unbound" was written when the
+default graph's sentinel was 1; the log.md §5.3 amendment moved that sentinel to
+0, so in the G position "unbound" and "the default graph" collided. Resolution:
+0 stays unbound in every position, and binding G to the default graph is spelled
+`MATCH_DEFAULT_GRAPH` — the bit pattern `0x8000_0000`, which §3 reserves as
+invalid in term space (inline flag set, tag zero), so it can never name a term.
+S, P, and O need no such spelling: no fact carries 0 there. A graph *set*
+(`Filter.Graphs`) holds stored G components, where 0 unambiguously is the
+default graph; `MATCH_DEFAULT_GRAPH` is accepted there too.*
+
 **Order selection.** The six orders are `architecture.md` §4.1's, with `G`
 appended as the final tiebreaker (§5.1). Every triple pattern is prefix-covered:
 
