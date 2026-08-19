@@ -102,27 +102,48 @@ Quad :: struct {
 }
 
 // Gen is the generator's running state: the writer owns the log-level
-// invariants; this owns which ids exist and which quads are live.
+// invariants; this owns which ids exist and which quads are live —
+// including the set semantics of log.md par. 5.3, which the writer
+// does not enforce (that is the resident store's Apply, next
+// initiative) but which this generator must honor for the corpus to
+// be a valid substrate for the resident build: a graph is a set, so
+// an assert must never duplicate a live quad.
 @(private = "file")
 Gen :: struct {
 	rng:       u64,
 	next_term: u64,
 	date_dt:   u64, // the xsd:date IRI's id, defined first (par. 5.2 ordering)
 	live:      [dynamic]Quad,
+	live_set:  map[Quad]bool, // the same quads, for the duplicate-assert check
+	enc_ids:   map[string]u64, // encoding -> id: the generator interns, as a real writer does (par. 5.2)
 	iris:      [dynamic]u64, // term ids usable as S and G
 	objects:   [dynamic]u64, // term ids usable as O
 	preds:     [dynamic]u64, // a small predicate pool, ISMS-shaped
-	// per-commit accumulators; enc strings are freed after the commit
+	// per-commit accumulators
 	terms:     [dynamic]rec.Term_Def,
 	ops:       [dynamic]rec.Fact_Op,
+	// every encoding of the run, owned here: enc_ids' keys and the
+	// pending Term_Defs view these, so they are freed once at the end
 	arena:     [dynamic]string,
 }
 
+// gen_new_term interns: literals draw from small value spaces (630
+// possible dates, word-salad strings), so a fresh encoding frequently
+// equals an existing term — and a real writer reuses the id rather
+// than defining the same encoding twice, which the resident build
+// refuses (.Duplicate_Term). The arena therefore owns every encoding
+// for the whole run — the map's keys view them — and is freed once at
+// the end.
 @(private = "file")
 gen_new_term :: proc(g: ^Gen, enc: string) -> u64 {
+	if id, ok := g.enc_ids[enc]; ok {
+		delete(enc)
+		return id
+	}
 	id := g.next_term
 	g.next_term += 1
 	append(&g.arena, enc)
+	g.enc_ids[enc] = id
 	append(&g.terms, rec.Term_Def{id = id, enc = transmute([]u8)enc})
 	return id
 }
@@ -196,7 +217,7 @@ gen_object :: proc(g: ^Gen) -> u64 {
 // memory, then flushes the finished segments to dir on disk. Returns
 // the writer's end state for the replay cross-check.
 @(private = "file")
-gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_epoch: u64, terms: u64, sizes: int) {
+gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_epoch: u64, terms: u64, sizes: int, live: int) {
 	fs: Mem_FS
 	defer mem_destroy(&fs)
 	g: Gen
@@ -204,6 +225,8 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 	g.next_term = 1
 	defer {
 		delete(g.live)
+		delete(g.live_set)
+		delete(g.enc_ids)
 		delete(g.iris)
 		delete(g.objects)
 		delete(g.preds)
@@ -241,6 +264,7 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 				i := splitmix(&g.rng) % u64(len(g.live))
 				q := g.live[i]
 				unordered_remove(&g.live, int(i))
+				delete_key(&g.live_set, q)
 				append(&g.ops, rec.Fact_Op{op = .Retract, s = q.s, p = q.p, o = q.o, g = q.g})
 			} else {
 				s := g.iris[splitmix(&g.rng)%u64(len(g.iris))]
@@ -253,19 +277,28 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 				if splitmix(&g.rng)%100 < 30 {
 					gr = g.iris[splitmix(&g.rng)%u64(len(g.iris))]
 				}
-				append(&g.live, Quad{s, p, o, gr})
-				append(&g.ops, rec.Fact_Op{op = .Assert, s = s, p = p, o = o, g = gr})
+				// Objects come from a reused pool, so a fresh draw can
+				// collide with a live quad; re-roll the object until it
+				// does not. Rare enough that the corpus is unchanged in
+				// shape, and it keeps the log a set (par. 5.3).
+				q := Quad{s, p, o, gr}
+				for {
+					if !(q in g.live_set) {
+						break
+					}
+					q.o = gen_object(&g)
+				}
+				g.live_set[q] = true
+				append(&g.live, q)
+				append(&g.ops, rec.Fact_Op{op = .Assert, s = q.s, p = q.p, o = q.o, g = q.g})
 			}
 		}
 		werr := rec.writer_commit(&w, {epoch = u64(e), wall = WALL + u64(e), terms = g.terms[:], ops = g.ops[:]})
 		testing.expect_value(t, werr, rec.Writer_Error.None)
-		for s in g.arena {
-			delete(s)
-		}
-		clear(&g.arena)
 	}
 	last_epoch = w.prev_epoch
 	terms = w.next_term_id - 1
+	live = len(g.live)
 
 	// Flush the finished segments (and HEAD) to disk; verify and
 	// replay then read them through the production posix ops.
@@ -278,7 +311,7 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 		testing.expect(t, werr == nil, "the store flushes to disk")
 		sizes += len(f.data)
 	}
-	return last_epoch, terms, sizes
+	return last_epoch, terms, sizes, live
 }
 
 @(private = "file")
@@ -311,7 +344,7 @@ counting_consumer :: proc(c: ^Counter) -> rec.Consumer {
 
 @(private = "file")
 measure :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
-	last_epoch, terms, size := gen_store(t, dir, epochs, SEED)
+	last_epoch, terms, size, _ := gen_store(t, dir, epochs, SEED)
 	testing.expect_value(t, last_epoch, u64(epochs))
 	testing.expect(t, terms > 60_000 && terms < 170_000, "the term count is ISMS-shaped")
 
@@ -343,6 +376,91 @@ measure :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	// verification runs at every startup too (log.md par. 6).
 	testing.expect(t, verify_ms < 1000, "full verification stays under a second")
 	testing.expect(t, replay_ms < 1000, "full replay stays under a second")
+}
+
+// Mirror is the resident build's independent witness at scale
+// (RECORD-T-0007): a second replay over the same log, checking every
+// delivery against the already-built store — terms byte-for-byte
+// through the arena, asserts against their positional fact, retracts
+// resolved through its own live map rather than the Loader's.
+@(private = "file")
+Mirror :: struct {
+	t:    ^testing.T,
+	s:    ^rec.Store,
+	live: map[rec.Quad]u32,
+	n:    u32, // asserts seen — the fact id the next assert must land on
+}
+
+@(private = "file")
+mirror_consumer :: proc(m: ^Mirror) -> rec.Consumer {
+	return {
+		data = m,
+		term = proc(data: rawptr, id: u64, enc: []byte) -> bool {
+			m := (^Mirror)(data)
+			got := rec.dict_bytes(&m.s.dict, rec.resident_id(id))
+			ok := string(got) == string(enc)
+			testing.expect(m.t, ok, "the arena holds the log's encoding verbatim")
+			return ok
+		},
+		op = proc(data: rawptr, epoch: u64, op: rec.Fact_Op) -> bool {
+			m := (^Mirror)(data)
+			q := rec.Quad{rec.resident_id(op.s), rec.resident_id(op.p), rec.resident_id(op.o), rec.resident_id(op.g)}
+			ok: bool
+			switch op.op {
+			case .Assert, .Assert_Derived:
+				f := rec.store_fact(m.s, m.n)^
+				ok = f.s == q.s && f.p == q.p && f.o == q.o && f.g == q.g && f.assert == u32(epoch)
+				testing.expect(m.t, ok, "an assert lands at its positional fact id")
+				m.live[q] = m.n
+				m.n += 1
+			case .Retract, .Retract_Derived:
+				id, was_live := m.live[q]
+				ok = was_live && rec.store_fact(m.s, id).retract == u32(epoch)
+				testing.expect(m.t, ok, "a retract resolved to the live generation")
+				delete_key(&m.live, q)
+			}
+			return ok
+		},
+	}
+}
+
+@(test)
+test_scale_resident_build :: proc(t: ^testing.T) {
+	dir :: "build/scale/resident"
+	last_epoch, terms, _, live := gen_store(t, dir, 1_000, SEED)
+
+	s: rec.Store
+	rec.store_init(&s)
+	defer rec.store_destroy(&s)
+	ld: rec.Loader
+	rec.loader_init(&ld, &s)
+	defer rec.loader_destroy(&ld)
+	r, tear, err := rec.replay(dir, rec.posix_file_ops(), rec.loader_consumer(&ld))
+	testing.expect_value(t, err, rec.Open_Error.None)
+	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
+	testing.expect_value(t, ld.err, rec.Load_Error.None)
+
+	// Counts against the verified walk and the generator's own state.
+	testing.expect_value(t, s.n_facts, r.fact_count)
+	testing.expect_value(t, u64(s.n_epochs), last_epoch)
+	testing.expect_value(t, u64(len(s.dict.off)), terms)
+	testing.expect_value(t, len(ld.live), live)
+	n_live: int
+	for id in u32(0) ..< s.n_facts {
+		if rec.store_fact(&s, id).retract == rec.LIVE_EPOCH {
+			n_live += 1
+		}
+	}
+	testing.expect_value(t, n_live, live)
+
+	// Contents: a second replay mirrors the stream against the store,
+	// ops one for one, terms byte-for-byte.
+	m := Mirror{t = t, s = &s}
+	defer delete(m.live)
+	_, _, merr := rec.replay(dir, rec.posix_file_ops(), mirror_consumer(&m))
+	testing.expect_value(t, merr, rec.Open_Error.None)
+	testing.expect_value(t, m.n, s.n_facts)
+	testing.expect_value(t, len(m.live), live)
 }
 
 @(test)

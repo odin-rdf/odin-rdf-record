@@ -24,7 +24,10 @@
 // (RECORD-T-0002); open.odin is the open path — chain verification and
 // torn-tail recovery (RECORD-T-0003); replay.odin streams the verified
 // log to a consumer procedure set, the seam the resident store binds
-// to (RECORD-T-0004); the resident structures follow as their tasks
+// to (RECORD-T-0004); resident.odin is the resident layout — the fact
+// table, the dictionary arena, the epoch table — and load.odin the
+// Loader that fills it from the replay seam (RECORD-T-0007); the
+// permutations, snapshots, and the read API follow as their tasks
 // land. The CLI (verify, dump, head) will live
 // in tool/ at the repository root, following the family's root-level
 // main-package pattern.
