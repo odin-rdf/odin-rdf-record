@@ -4,14 +4,14 @@ level: initiative
 title: "The log of record: format, write path, verification, tooling"
 short_code: "RECORD-I-0001"
 created_at: 2026-08-19T17:15:24.558917+00:00
-updated_at: 2026-08-19T17:15:24.558917+00:00
+updated_at: 2026-08-19T17:20:59.274731+00:00
 parent: RECORD-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/decompose"
 
 
 exit_criteria_met: false
