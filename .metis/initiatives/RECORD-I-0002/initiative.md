@@ -4,14 +4,14 @@ level: initiative
 title: "The resident store: replay-built projection and the snapshot read API"
 short_code: "RECORD-I-0002"
 created_at: 2026-08-19T20:02:06.582341+00:00
-updated_at: 2026-08-19T20:02:06.582341+00:00
+updated_at: 2026-08-19T20:16:59.089059+00:00
 parent: RECORD-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/discovery"
+  - "#phase/active"
 
 
 exit_criteria_met: false
