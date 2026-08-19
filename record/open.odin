@@ -32,9 +32,15 @@
 package record
 
 // Open_Error is the open path's verdict taxonomy. Clean is None; Torn
-// is verify's report of a recoverable tear (recover converts it into
-// the repair); everything else halts, because it is evidence of
-// corruption or tampering that truncation would destroy.
+// is verify's and replay's report of a recoverable tear (recover
+// converts it into the repair); everything else halts, because it is
+// evidence of corruption or tampering that truncation would destroy.
+//
+// The members below Torn are replay's alone (RECORD-T-0004): they
+// judge what the records *say*, not whether the bytes were altered,
+// and verify never returns them — a log can carry a perfect chain
+// around a writer's nonsense, and "was this altered?" and "can this be
+// replayed?" are different questions with different answerers.
 Open_Error :: enum {
 	None,
 	No_Store,           // segment 000001.rlog is absent — nothing to open
@@ -45,7 +51,13 @@ Open_Error :: enum {
 	Corrupt,            // a damaged or unknown record outside the one recoverable position
 	Chain_Broken,       // a prev_hash or hash that does not verify (log.md par. 6)
 	Epoch_Gap,          // a commit whose epoch is not last_epoch + 1
-	Torn,               // verify only: a recoverable tear, located by the Tear
+	Torn,               // verify/replay only: a recoverable tear, located by the Tear
+	Term_Order,         // replay only: a term definition out of first-appearance order (log.md par. 5.2)
+	Term_Overflow,      // replay only: a dictionary id past the resident scheme's range (api.md par. 3.4)
+	Bad_Term_Id,        // replay only: an op, actor, or reason naming an id no record defined
+	Inline_Range,       // replay only: an inlined component outside RECORD-A-0001's frozen range
+	Note_Epoch,         // replay only: a note whose lastEpoch is not the epoch it follows
+	Consumer_Abort,     // replay only: the consumer refused a delivery
 }
 
 // Tear_Kind classifies the recoverable crash artifacts. Tail is
@@ -103,6 +115,24 @@ verify :: proc(
 	tear: Tear,
 	err: Open_Error,
 ) {
+	return open_walk(dir, ops, nil, allocator)
+}
+
+// open_walk is the one reader behind verify and replay: the same
+// segments, the same checks, the same verdicts. With a consumer it
+// additionally judges what each verified record says (replay.odin) and
+// delivers it; without one it is exactly par. 6's verifier.
+@(private)
+open_walk :: proc(
+	dir: string,
+	ops: File_Ops,
+	c: ^Consumer,
+	allocator := context.allocator,
+) -> (
+	r: Verify_Result,
+	tear: Tear,
+	err: Open_Error,
+) {
 	r.next_term_id = 1 // id 0 is "none" and is never allocated
 
 	path_buf: [512]u8
@@ -137,7 +167,7 @@ verify :: proc(
 		size: int
 		records: u64
 		sealed: bool
-		size, records, sealed, tear, err = walk_segment(&r, contents, seg_no, final)
+		size, records, sealed, tear, err = walk_segment(&r, c, contents, seg_no, final)
 		delete(contents, allocator)
 		if err != .None {
 			delete(next, allocator)
@@ -219,10 +249,13 @@ recover :: proc(
 // walk_segment verifies one segment against the walk's running state,
 // advancing it record by record. `final` is the position rule's input:
 // only the final segment may report a Tear; the same damage anywhere
-// else is a halting verdict.
+// else is a halting verdict. A non-nil consumer makes this replay: each
+// record is judged and delivered after its chain checks pass and
+// before the running state advances past it.
 @(private)
 walk_segment :: proc(
 	r: ^Verify_Result,
+	c: ^Consumer,
 	data: []byte,
 	seg_no: u32,
 	final: bool,
@@ -317,6 +350,11 @@ walk_segment :: proc(
 			if chain_hash(body) != v.hash {
 				return size, records, sealed, tear, .Chain_Broken
 			}
+			if c != nil {
+				if rerr := replay_commit(r, c, v); rerr != .None {
+					return size, records, sealed, tear, rerr
+				}
+			}
 			r.head = v.hash
 			r.last_epoch = v.epoch
 			r.next_term_id += u64(v.n_terms)
@@ -338,6 +376,11 @@ walk_segment :: proc(
 			}
 			if chain_hash(body) != v.hash {
 				return size, records, sealed, tear, .Chain_Broken
+			}
+			if c != nil {
+				if rerr := replay_note(r, c, v); rerr != .None {
+					return size, records, sealed, tear, rerr
+				}
 			}
 			r.head = v.hash
 			sealed = false

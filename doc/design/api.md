@@ -419,6 +419,13 @@ Two rules follow, and 32-bit resident IDs are incorrect without both:
    derived representation makes its scale assumption — which is where an
    assumption belongs.
 
+   *Amended 2026-08-19 (RECORD-T-0004): the implemented bound is 2³¹, not 2³².
+   "Fits in `u32`" was this rule's shorthand, but §3's own encoding spends
+   bit 31 on the inline flag, so the space a dictionary ID may occupy is bits
+   0–30 and the sharper bound is the true one. Replay refuses at 2³¹
+   (`Term_Overflow`); at the design scale of ~10⁵ terms the margin is still
+   four orders of magnitude.*
+
 ### 3.5 The log stays 64-bit
 
 `log.md` §5.2 and §5.3 encode term IDs as `u64` on disk. That should not change.

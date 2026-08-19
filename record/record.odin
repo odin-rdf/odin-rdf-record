@@ -22,8 +22,10 @@
 // encoding layer (RECORD-T-0001); writer.odin and writer_posix.odin are
 // the single-writer append path with its injectable file seam
 // (RECORD-T-0002); open.odin is the open path — chain verification and
-// torn-tail recovery (RECORD-T-0003); replay and the resident
-// structures follow as their tasks land. The CLI (verify, dump, head) will live
+// torn-tail recovery (RECORD-T-0003); replay.odin streams the verified
+// log to a consumer procedure set, the seam the resident store binds
+// to (RECORD-T-0004); the resident structures follow as their tasks
+// land. The CLI (verify, dump, head) will live
 // in tool/ at the repository root, following the family's root-level
 // main-package pattern.
 package record
