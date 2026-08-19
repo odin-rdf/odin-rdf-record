@@ -19,8 +19,10 @@
 // log determines everything resident, so an internal package boundary
 // would only force internals into a public surface. Files map to the
 // initiative's tasks: encode.odin and crc32c.odin are the pure
-// encoding layer (RECORD-T-0001); the writer, the open path, replay,
-// and the resident structures follow as their tasks land. The CLI
-// (verify, dump, head) will live in tool/ at the repository root,
-// following the family's root-level main-package pattern.
+// encoding layer (RECORD-T-0001); writer.odin and writer_os.odin are
+// the single-writer append path with its injectable file seam
+// (RECORD-T-0002); the open path, replay, and the resident structures
+// follow as their tasks land. The CLI (verify, dump, head) will live
+// in tool/ at the repository root, following the family's root-level
+// main-package pattern.
 package record
