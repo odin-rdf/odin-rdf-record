@@ -587,6 +587,16 @@ sorting every 1024 writes — roughly every three minutes at the assumed rate �
 it blocks the single writer, not readers, who are holding earlier snapshots and
 cannot observe it.
 
+*Measured 2026-08-19 (RECORD-T-0008): the ~30 ms estimate is optimistic by ~18×.
+Six comparison sorts over 3.4×10⁵ facts run 535 ms at `-o:speed` (arm64 darwin dev
+machine), already using transient key-beside-id sort records — comparing through
+the fact table costs 756 ms, and the comparator call itself is the remaining
+floor. The structural claims here survive (readers unaffected; the delta bounds
+per-commit cost), but the writer stall per rebuild is half a second, not 30 ms,
+until someone spends the ~50 lines a radix sort costs. Whether that is needed is
+RECORD-T-0012's measurement to force; boot currently fits the sub-second criterion
+with this number in it.*
+
 **The rebuild is `buildPermutations()`** — the same six sorts `log.md` §8 already
 runs at the end of replay. One code path rather than two, exercised on every wake
 as well as every merge, which is the argument `log.md` makes for replay being the

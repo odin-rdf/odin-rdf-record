@@ -689,7 +689,10 @@ Two notes on cost. Facts are appended in log order, so the fact table is built b
 `append` with no reordering. The six permutations are built once at the end by
 sorting, not by incremental insertion — `sort.Slice` over 4×10⁵ `uint32`s six times
 is tens of milliseconds, against the O(n) memmove per insertion that §Scale
-budgets for the steady-state write path.
+budgets for the steady-state write path. *(Measured 2026-08-19, RECORD-T-0008:
+535 ms optimized for the six sorts at 3.4×10⁵ facts — the estimate was optimistic;
+see the api.md §5.2 amendment. The build-by-sorting conclusion stands: incremental
+insertion would be minutes.)*
 
 `liveFact` needs a `map[Quad]FactID` of currently-live facts during replay. That is
 transient replay scaffolding, ~20 MB at 4×10⁵ facts, and it can be dropped

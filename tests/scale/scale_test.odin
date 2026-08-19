@@ -461,6 +461,38 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	testing.expect_value(t, merr, rec.Open_Error.None)
 	testing.expect_value(t, m.n, s.n_facts)
 	testing.expect_value(t, len(m.live), live)
+
+	// The six permutations over the full table (RECORD-T-0008):
+	// sortedness asserted at scale through the public key surface, and
+	// the build timed informally — the formal boot measurement is
+	// RECORD-T-0012's.
+	start := time.tick_now()
+	rec.store_build_permutations(&s)
+	sort_ms := time.duration_milliseconds(time.tick_since(start))
+	for o in rec.Order {
+		ids := s.ord[o]
+		testing.expect_value(t, u32(len(ids)), s.n_facts)
+		key := rec.order_key(o)
+		for i in 1 ..< len(ids) {
+			fa := rec.store_fact(&s, ids[i-1])
+			fb := rec.store_fact(&s, ids[i])
+			ordered := false
+			for c in key {
+				va := rec.fact_component(fa, c)
+				vb := rec.fact_component(fb, c)
+				if va != vb {
+					ordered = va < vb
+					break
+				}
+				ordered = ids[i-1] < ids[i]
+			}
+			if !ordered {
+				testing.expectf(t, ordered, "%v out of order at %d", o, i)
+				break
+			}
+		}
+	}
+	log.infof("permutations: 6 orders over %d facts sorted in %.0f ms", s.n_facts, sort_ms)
 }
 
 @(test)

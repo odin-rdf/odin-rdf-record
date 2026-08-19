@@ -155,6 +155,7 @@ Store :: struct {
 	epochs:    [dynamic][]Epoch_Meta, // EPOCH_CHUNK_SIZE-entry chunks, indexed by epoch-1
 	n_epochs:  u32, // committed epochs; equals the last epoch, since epochs are contiguous from 1
 	notes:     [dynamic]Env_Note, // in log order; last_epoch is non-decreasing
+	ord:       [Order][]u32, // the six sorted FactID permutations (permute.odin); empty until built
 	allocator: runtime.Allocator,
 }
 
@@ -189,6 +190,9 @@ store_destroy :: proc(s: ^Store) {
 		delete(n.payload, s.allocator)
 	}
 	delete(s.notes)
+	for o in Order {
+		delete(s.ord[o], s.allocator)
+	}
 	for c in s.dict.chunks {
 		delete(c, s.allocator)
 	}
