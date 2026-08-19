@@ -30,6 +30,12 @@ FRAME_OVERHEAD :: 8
 MAX_RECORD_SIZE :: 64 * 1024 * 1024
 OP_SIZE :: 33
 
+// DEFAULT_GRAPH is the graph component of a fact in the default graph
+// (log.md par. 5.3, amended 2026-08-19): 0, the same "none" that actor
+// and reason use, because an absent graph name is the default graph.
+// Valid in G and nowhere else — S, P, and O may never be 0.
+DEFAULT_GRAPH :: u64(0)
+
 // Record_Kind is a body's first byte. Kinds 0x04..0x7F are reserved;
 // a reader that meets one in a sealed segment must fail, not skip.
 Record_Kind :: enum u8 {
@@ -75,7 +81,7 @@ Encode_Error :: enum {
 	None,
 	Epoch_Gap,    // epoch is not prev_epoch + 1 (log.md par. 5.1)
 	Term_Order,   // term ids not contiguous from next_term_id (par. 5.2)
-	Bad_Term_Id,  // a zero id, an inlined definition, or an op naming an undefined dictionary id
+	Bad_Term_Id,  // a zero S/P/O, an inlined definition or graph label, or an undefined dictionary id
 	Inline_Range, // an inlined id outside RECORD-A-0001's frozen range
 	Bad_Op,       // an op kind the format does not define
 	Too_Large,    // the body would exceed MAX_RECORD_SIZE
@@ -317,7 +323,9 @@ inline_integer :: proc(v: i64) -> (id: u64, ok: bool) {
 // ids must run contiguously from next_term_id in first-appearance
 // order (par. 5.2), no term definition may be inlined, and every op
 // component must be a nonzero id that is either a defined dictionary
-// id or an inlined value in the frozen range. Live-quad preconditions
+// id or an inlined value in the frozen range — except G, where 0 is
+// the default graph and an inlined id is never legal (par. 5.3,
+// amended: a graph label is not a literal). Live-quad preconditions
 // need resident state and are Apply's business, not this layer's.
 // The returned body is allocated from `allocator`; the caller owns it.
 commit_encode :: proc(
@@ -347,7 +355,7 @@ commit_encode :: proc(
 		if op.op != .Assert && op.op != .Retract && op.op != .Assert_Derived && op.op != .Retract_Derived {
 			return nil, .Bad_Op
 		}
-		for id in ([4]u64{op.s, op.p, op.o, op.g}) {
+		for id in ([3]u64{op.s, op.p, op.o}) {
 			if id == 0 {
 				return nil, .Bad_Term_Id
 			}
@@ -356,6 +364,15 @@ commit_encode :: proc(
 					return nil, .Inline_Range
 				}
 			} else if id >= max_term {
+				return nil, .Bad_Term_Id
+			}
+		}
+		// G is the one component 0 is legal in — the default graph —
+		// and the one component an inlined id never is: every inlined
+		// term is a literal, and a graph label is an IRI or a blank
+		// node (log.md par. 5.3, amended).
+		if op.g != DEFAULT_GRAPH {
+			if op.g&INLINE_FLAG != 0 || op.g >= max_term {
 				return nil, .Bad_Term_Id
 			}
 		}

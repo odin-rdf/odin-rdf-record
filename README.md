@@ -56,6 +56,7 @@ on their side once the API here is real.
 
 ```
 record/       the package: log, replay, resident store, snapshot API
+tool/         the record CLI: verify, dump, head — the auditor's read surface
 doc/design/   the founding documents (the spec; see doc/design/README.md)
 .metis/       vision, ADRs, initiatives — the why behind the contracts
 ```
@@ -63,11 +64,25 @@ doc/design/   the founding documents (the spec; see doc/design/README.md)
 ## Commands
 
 ```
-make test    # the test suite
+make test    # the test suite (builds the CLI first; tests/tool drives it)
 make check   # vet every package with -vet -strict-style
+make tool    # build the record CLI into build/record
 make help    # list targets
 make clean   # remove build/
 ```
+
+The CLI is the read surface an auditor gets (`log.md` §12 q6):
+
+```
+build/record verify <dir>                    # full chain verification; head hash and last epoch
+build/record head <dir>                      # derived head beside the advisory HEAD file
+build/record dump [--format=nquads|json] <dir>   # every fact operation, terms resolved
+```
+
+All three are read-only. Exit codes: 0 clean, 2 a torn tail was found
+(reported, never repaired here), 1 anything else. A dump renders the log —
+the sequence of operations, retractions marked as events — not the graph
+they produce.
 
 There is deliberately no `Term_ID` width matrix here: this store fixes both of
 its ID widths by design — `u64` on disk, `u32` resident with an inline range —

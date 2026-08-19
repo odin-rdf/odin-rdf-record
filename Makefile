@@ -6,8 +6,9 @@
 COLL := -collection:rdf=../odin-rdf-parser
 
 # Every package with tests. Grows with the implementation; tests/readme joins
-# it when the README carries its first example.
-PKGS := record
+# it when the README carries its first example. tests/tool drives the built
+# binary, so the test target depends on tool.
+PKGS := record tests/tool
 
 # There is no Term_ID width matrix here, deliberately. The family's dual-width
 # convention exists because odin-rdf-store makes ID width a build-time choice
@@ -16,7 +17,7 @@ PKGS := record
 # (par. 3) -- because the inline encoding is frozen at first write (par. 3.3)
 # and a build knob would put that freeze at the mercy of a flag.
 
-.PHONY: all help test check clean
+.PHONY: all help test check tool clean
 
 all: test
 
@@ -30,7 +31,7 @@ help: ## Show available targets
 # frees by default, which a passing build hides. Promote them to failures.
 TEST_FLAGS := -define:ODIN_TEST_FAIL_ON_BAD_MEMORY=true $(COLL)
 
-test: ## Run the test suite
+test: tool ## Run the test suite
 	@for pkg in $(PKGS); do \
 		echo "-- $$pkg --"; \
 		odin test $$pkg $(TEST_FLAGS) || exit 1; \
@@ -41,6 +42,14 @@ check: ## Vet every package
 		echo "-- $$pkg --"; \
 		odin check $$pkg -no-entry-point -vet -strict-style $(COLL) || exit 1; \
 	done
+	@echo "-- tool --"
+	@odin check tool -vet -strict-style $(COLL)
+
+# The CLI (log.md par. 12 q6): verify, dump, head — the auditor's read
+# surface, a consumer of the record package like any other.
+tool: ## Build the record CLI into build/record
+	@mkdir -p build
+	odin build tool -out:build/record -vet -strict-style $(COLL)
 
 clean: ## Remove build/
 	rm -rf build

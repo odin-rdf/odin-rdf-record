@@ -305,8 +305,21 @@ itself, not metadata attached later.
 are required rather than optional — TBox/ABox separation, ontology versioning,
 quarantining machine-generated assertions, retiring a source atomically. §9 of
 `architecture.md` costed quads at 2.4× on-disk under the B+tree design; here it is
-8 bytes on an op and one extra field in `Fact`. The default graph gets sentinel ID
-1, per §9's recommendation.
+8 bytes on an op and one extra field in `Fact`. ~~The default graph gets sentinel ID
+1, per §9's recommendation.~~
+
+**Amended 2026-08-19 (RECORD-T-0005): the default-graph sentinel is 0, not 1.**
+Sentinel 1 collides with §5.2's own rule: dictionary IDs are assigned in
+first-appearance order starting at 1, so the first interned term *is* ID 1, and a
+G of 1 would be ambiguous between "the default graph" and "the named graph whose
+label is term 1" — or the dictionary origin would have to shift to 2, disturbing
+every ID in every existing vector. Zero is the natural sentinel instead: §5.1
+already uses 0 as "none" for `actor` and `reason`, and an absent graph name *is*
+the default graph. `G == 0` therefore means the default graph; `S`, `P`, and `O`
+remain forbidden from being 0. One consequence is stated here rather than left
+implicit: **an inlined ID is never a legal graph component** — every inlined term
+is a literal, and a graph label is an IRI or a blank node, so a writer must refuse
+an inlined `G` and a replayer must reject one.
 
 **Fact IDs are positional.** The *n*-th assert in log order is fact *n*, counting
 from the segment header's first-fact-ID field. This reproduces `architecture.md`

@@ -120,10 +120,12 @@ replay_commit :: proc(r: ^Verify_Result, c: ^Consumer, v: Commit_View) -> Open_E
 	// Every op component is either a defined dictionary id or an
 	// inlined value the resident scheme can hold — the writer-side
 	// rules of commit_encode, mirrored at the boundary the resident
-	// store trusts (api.md par. 3.4).
+	// store trusts (api.md par. 3.4). G alone may be 0 (the default
+	// graph) and may never be inlined: a graph label is not a literal
+	// (log.md par. 5.3, amended).
 	ops := commit_ops(v)
 	for op in op_next(&ops) {
-		for id in ([4]u64{op.s, op.p, op.o, op.g}) {
+		for id in ([3]u64{op.s, op.p, op.o}) {
 			if id == 0 {
 				return .Bad_Term_Id
 			}
@@ -132,6 +134,11 @@ replay_commit :: proc(r: ^Verify_Result, c: ^Consumer, v: Commit_View) -> Open_E
 					return .Inline_Range
 				}
 			} else if id >= next {
+				return .Bad_Term_Id
+			}
+		}
+		if op.g != DEFAULT_GRAPH {
+			if op.g&INLINE_FLAG != 0 || op.g >= next {
 				return .Bad_Term_Id
 			}
 		}

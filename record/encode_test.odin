@@ -219,8 +219,27 @@ test_commit_encode_refusals :: proc(t: ^testing.T) {
 	_, err = commit_encode(c2, {}, 0, 1)
 	testing.expect_value(t, err, Encode_Error.Bad_Term_Id)
 
-	// A zero component: the graph is mandatory, and 0 is "unbound".
-	ops_bad[0] = {op = .Assert, s = 1, p = 2, o = 1, g = 0}
+	// A zero subject: 0 is legal only in G, where it is the default
+	// graph (log.md par. 5.3, amended 2026-08-19).
+	ops_bad[0] = {op = .Assert, s = 0, p = 2, o = 1, g = 1}
+	_, err = commit_encode(c2, {}, 0, 1)
+	testing.expect_value(t, err, Encode_Error.Bad_Term_Id)
+
+	// The default graph itself encodes.
+	ops_bad[0] = {op = .Assert, s = 1, p = 2, o = 1, g = DEFAULT_GRAPH}
+	dg_body, dg_err := commit_encode(c2, {}, 0, 1)
+	testing.expect_value(t, dg_err, Encode_Error.None)
+	delete(dg_body)
+
+	// An inlined graph label: every inlined term is a literal, and a
+	// graph label is never a literal.
+	inl, _ := inline_integer(1)
+	ops_bad[0] = {op = .Assert, s = 1, p = 2, o = 1, g = inl}
+	_, err = commit_encode(c2, {}, 0, 1)
+	testing.expect_value(t, err, Encode_Error.Bad_Term_Id)
+
+	// A named graph nothing has defined.
+	ops_bad[0] = {op = .Assert, s = 1, p = 2, o = 1, g = 99}
 	_, err = commit_encode(c2, {}, 0, 1)
 	testing.expect_value(t, err, Encode_Error.Bad_Term_Id)
 
