@@ -7,18 +7,18 @@ import "core:testing"
 
 // The one test against the real filesystem: everything else runs on
 // the injectable fake, and the durability *ordering* is proven there —
-// what this proves is that os_file_ops actually opens, appends,
+// what this proves is that posix_file_ops actually opens, appends,
 // fsyncs, and links files a reader can load back. Linux is the
 // production environment; on Windows the suite simply lacks this file.
 
 @(test)
-test_os_writer_smoke :: proc(t: ^testing.T) {
+test_posix_writer_smoke :: proc(t: ^testing.T) {
 	_ = posix.mkdir("build", posix.mode_t{.IRUSR, .IWUSR, .IXUSR, .IRGRP, .IXGRP, .IROTH, .IXOTH})             // may already exist
 	_ = posix.mkdir("build/writer-smoke", posix.mode_t{.IRUSR, .IWUSR, .IXUSR, .IRGRP, .IXGRP, .IROTH, .IXOTH})
 	_ = posix.unlink("build/writer-smoke/000001.rlog") // segments are create-exclusive
 	_ = posix.unlink("build/writer-smoke/HEAD")
 
-	w, err := writer_create("build/writer-smoke", os_file_ops())
+	w, err := writer_create("build/writer-smoke", posix_file_ops())
 	testing.expect_value(t, err, Writer_Error.None)
 
 	terms := [1]Term_Def{{id = 1, enc = transmute([]u8)string("\x01http://example.org/a")}}

@@ -93,7 +93,7 @@ test that breaks if the order changes.
 
 - **2026-08-19 — completed.** `record/writer.odin` (the single-writer
   append path behind the injectable `File_Ops` seam) and
-  `record/writer_os.odin` (the POSIX implementation, build-tagged
+  `record/writer_posix.odin` (the POSIX implementation, build-tagged
   `linux, darwin`). Eighteen tests green under
   `ODIN_TEST_FAIL_ON_BAD_MEMORY`, the centerpiece being the crash sweep:
   the full script (four commits, a note, one size-triggered and one

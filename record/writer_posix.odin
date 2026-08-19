@@ -8,7 +8,7 @@
 //
 // On Linux, fsync(2) is the durability guarantee, and it is what
 // production relies on. On darwin, fsync only pushes data to the
-// drive, not through its cache, so os_sync issues F_FULLFSYNC first —
+// drive, not through its cache, so posix_sync issues F_FULLFSYNC first —
 // core:sys/posix does not expose the constant, so it is defined here
 // from <sys/fcntl.h> — and falls back to fsync where the filesystem
 // refuses it (network mounts, notably), the same posture SQLite
@@ -18,16 +18,16 @@ package record
 
 import "core:sys/posix"
 
-// os_file_ops returns File_Ops over the host filesystem. Stateless:
+// posix_file_ops returns File_Ops over the host filesystem. Stateless:
 // the data pointer is nil and every handle is a file descriptor.
-os_file_ops :: proc() -> File_Ops {
+posix_file_ops :: proc() -> File_Ops {
 	return {
-		create   = os_create,
-		append   = os_append,
-		sync     = os_sync,
-		close    = os_close,
-		sync_dir = os_sync_dir,
-		put_file = os_put_file,
+		create   = posix_create,
+		append   = posix_append,
+		sync     = posix_sync,
+		close    = posix_close,
+		sync_dir = posix_sync_dir,
+		put_file = posix_put_file,
 	}
 }
 
@@ -36,7 +36,7 @@ os_file_ops :: proc() -> File_Ops {
 DARWIN_F_FULLFSYNC :: 51
 
 @(private)
-os_create :: proc(_: rawptr, path: string) -> (File_Handle, bool) {
+posix_create :: proc(_: rawptr, path: string) -> (File_Handle, bool) {
 	buf: [1024]u8
 	fd := posix.open(cpath(buf[:], path), {.WRONLY, .CREAT, .EXCL}, posix.mode_t{.IRUSR, .IWUSR, .IRGRP, .IROTH})
 	if fd < 0 {
@@ -46,7 +46,7 @@ os_create :: proc(_: rawptr, path: string) -> (File_Handle, bool) {
 }
 
 @(private)
-os_append :: proc(_: rawptr, f: File_Handle, bytes: []byte) -> bool {
+posix_append :: proc(_: rawptr, f: File_Handle, bytes: []byte) -> bool {
 	fd := posix.FD(f)
 	rest := bytes
 	for len(rest) > 0 {
@@ -60,7 +60,7 @@ os_append :: proc(_: rawptr, f: File_Handle, bytes: []byte) -> bool {
 }
 
 @(private)
-os_sync :: proc(_: rawptr, f: File_Handle) -> bool {
+posix_sync :: proc(_: rawptr, f: File_Handle) -> bool {
 	fd := posix.FD(f)
 	when ODIN_OS == .Darwin {
 		if posix.fcntl(fd, posix.FCNTL_Cmd(DARWIN_F_FULLFSYNC)) != -1 {
@@ -72,12 +72,12 @@ os_sync :: proc(_: rawptr, f: File_Handle) -> bool {
 }
 
 @(private)
-os_close :: proc(_: rawptr, f: File_Handle) -> bool {
+posix_close :: proc(_: rawptr, f: File_Handle) -> bool {
 	return posix.close(posix.FD(f)) == .OK
 }
 
 @(private)
-os_sync_dir :: proc(_: rawptr, dir: string) -> bool {
+posix_sync_dir :: proc(_: rawptr, dir: string) -> bool {
 	buf: [1024]u8
 	fd := posix.open(cpath(buf[:], dir), {})
 	if fd < 0 {
@@ -88,7 +88,7 @@ os_sync_dir :: proc(_: rawptr, dir: string) -> bool {
 }
 
 @(private)
-os_put_file :: proc(_: rawptr, path: string, content: []byte) -> bool {
+posix_put_file :: proc(_: rawptr, path: string, content: []byte) -> bool {
 	buf: [1024]u8
 	fd := posix.open(cpath(buf[:], path), {.WRONLY, .CREAT, .TRUNC}, posix.mode_t{.IRUSR, .IWUSR, .IRGRP, .IROTH})
 	if fd < 0 {
