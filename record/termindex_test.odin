@@ -34,7 +34,7 @@ ti_add :: proc(t: ^testing.T, s: ^Store, encs: []string) {
 // ti_sorted checks an index against its dictionary: one id per term,
 // strictly ascending by bytes.
 @(private = "file")
-ti_sorted :: proc(t: ^testing.T, s: ^Store, terms: []u32, loc := #caller_location) {
+ti_sorted :: proc(t: ^testing.T, s: ^Store, terms: []Term_ID, loc := #caller_location) {
 	testing.expect_value(t, len(terms), len(s.dict.off), loc = loc)
 	seen := make([]bool, len(terms)+1)
 	defer delete(seen)
@@ -76,7 +76,7 @@ test_term_index_build_and_find :: proc(t: ^testing.T) {
 	for e, i in encs {
 		id, ok := snapshot_find(snap, ti_enc(e))
 		testing.expect(t, ok, "every interned encoding is found")
-		testing.expect_value(t, id, u32(i+1))
+		testing.expect_value(t, id, Term_ID(i+1))
 	}
 	misses := [?]string{"", "\x01http://ex/c", "\x01http://ex/", "\x03hell", "\x03hello!", "\x02b1", "\x06x"}
 	for m, i in misses {
@@ -106,7 +106,7 @@ test_term_index_merge_equals_rebuild :: proc(t: ^testing.T) {
 	first := [?]string{"\x01http://ex/m", "\x01http://ex/c", "\x03zzz", "\x02b"}
 	ti_add(t, &s, first[:])
 	store_build_term_index(&s)
-	base := make([]u32, len(s.terms))
+	base := make([]Term_ID, len(s.terms))
 	defer delete(base)
 	copy(base, s.terms)
 
@@ -116,7 +116,7 @@ test_term_index_merge_equals_rebuild :: proc(t: ^testing.T) {
 	ti_add(t, &s, later[:])
 	store_merge_term_index(&s, base)
 	ti_sorted(t, &s, s.terms)
-	merged := make([]u32, len(s.terms))
+	merged := make([]Term_ID, len(s.terms))
 	defer delete(merged)
 	copy(merged, s.terms)
 
@@ -124,7 +124,7 @@ test_term_index_merge_equals_rebuild :: proc(t: ^testing.T) {
 	testing.expect(t, bytes.compare(transmute([]byte)merged, transmute([]byte)s.terms) == 0, "a merge is a rebuild")
 
 	// Merging nothing new is a copy.
-	full := make([]u32, len(s.terms))
+	full := make([]Term_ID, len(s.terms))
 	defer delete(full)
 	copy(full, s.terms)
 	store_merge_term_index(&s, full)
@@ -167,7 +167,7 @@ torture_check :: proc(tt: ^Torture, snap: Snapshot) {
 	// The set is internally consistent: one term per id, the index
 	// and the offsets sized to it, the facts sized to the schedule.
 	torture_fault(tt, int(set.n_terms) == len(set.terms) && int(set.n_terms) == len(set.off))
-	torture_fault(tt, set.epoch >= E && set.n_terms == set.epoch+1 && set.n_facts == set.epoch)
+	torture_fault(tt, set.epoch >= E && set.n_terms == u32(set.epoch)+1 && set.n_facts == u32(set.epoch))
 
 	// Resolve: the predicate and the last term this epoch interned,
 	// by name, and the term after it is a miss for a set at this epoch
@@ -178,7 +178,7 @@ torture_check :: proc(tt: ^Torture, snap: Snapshot) {
 		name: [32]byte
 		last := fmt.bprintf(name[:], "http://ex/t%d", E-1)
 		id, ok := snapshot_resolve(snap, rdf.IRI(last))
-		torture_fault(tt, ok && id == E+1)
+		torture_fault(tt, ok && u32(id) == u32(E)+1)
 		torture_fault(tt, snapshot_kind(snap, id) == .IRI)
 	}
 	if set.epoch == E {
@@ -194,19 +194,22 @@ torture_check :: proc(tt: ^Torture, snap: Snapshot) {
 	sc := range_iter(snapshot_match(snap, {p = 1}), {origin = .Any})
 	for id in scan_next(&sc) {
 		f := snapshot_fact(snap, id)
-		torture_fault(tt, f.s == id+2 && f.o == id+2 && id+1 <= E && E < id+3)
+		// The schedule numbers terms, facts and epochs in lockstep, so the
+		// three id spaces are compared through their raw values on purpose.
+		k := u32(id)
+		torture_fault(tt, u32(f.s) == k+2 && u32(f.o) == k+2 && k+1 <= u32(E) && u32(E) < k+3)
 		n += 1
 	}
 	torture_fault(tt, n == min(int(E), 2))
 
 	// Exists, at the edges of the live window.
 	if E >= 1 {
-		torture_fault(tt, snapshot_exists(snap, {s = E + 1}, {origin = .Any}))
+		torture_fault(tt, snapshot_exists(snap, {s = Term_ID(E) + 1}, {origin = .Any}))
 	}
 	if E >= 3 {
-		torture_fault(tt, !snapshot_exists(snap, {s = E - 1}, {origin = .Any}))
+		torture_fault(tt, !snapshot_exists(snap, {s = Term_ID(E) - 1}, {origin = .Any}))
 	}
-	torture_fault(tt, !snapshot_exists(snap, {s = E + 2}, {origin = .Any}))
+	torture_fault(tt, !snapshot_exists(snap, {s = Term_ID(E) + 2}, {origin = .Any}))
 	// The epoch table through the set: every published epoch's meta.
 	if E >= 1 {
 		torture_fault(tt, snapshot_epoch_meta(snap, E).wall == u64(E))
@@ -264,11 +267,11 @@ test_term_index_reader_writer_torture :: proc(t: ^testing.T) {
 		enc := fmt.bprintf(name[:], "\x01http://ex/t%d", i)
 		id, aerr := dict_add(&s.dict, transmute([]byte)enc, s.allocator)
 		testing.expect_value(t, aerr, Load_Error.None)
-		testing.expect_value(t, id, E+1)
+		testing.expect_value(t, id, Term_ID(E+1))
 		epoch_append(&s, Epoch_Meta{wall = u64(E)})
-		fact_append(&s, Fact{s = id, p = 1, o = id, g = 0, assert = E, retract = LIVE_EPOCH}, false)
+		fact_append(&s, Fact{s = id, p = 1, o = id, g = 0, assert = Epoch(E), retract = LIVE_EPOCH}, false)
 		if i >= 2 {
-			sync.atomic_store_explicit(&store_fact(&s, u32(i-2)).retract, E, .Relaxed)
+			sync.atomic_store_explicit(&store_fact(&s, Fact_ID(i-2)).retract, Epoch(E), .Relaxed)
 		}
 		store_build_permutations(&s)
 		store_merge_term_index(&s, s.idx.terms)

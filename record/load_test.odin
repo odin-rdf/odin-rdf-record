@@ -56,8 +56,8 @@ test_load_canonical :: proc(t: ^testing.T) {
 		{s = 2, p = 2, o = 3, g = 1, assert = 3, retract = 4},
 	}
 	for f, i in want {
-		testing.expect_value(t, store_fact(&s, u32(i))^, f)
-		testing.expect_value(t, store_derived(&s, u32(i)), false)
+		testing.expect_value(t, store_fact(&s, Fact_ID(i))^, f)
+		testing.expect_value(t, store_derived(&s, Fact_ID(i)), false)
 	}
 	testing.expect_value(t, len(ld.live), 2)
 
@@ -71,19 +71,19 @@ test_load_canonical :: proc(t: ^testing.T) {
 	testing.expect_value(t, serr, Snapshot_Error.None)
 	defer snapshot_release(&snap)
 	for e, i in enc {
-		testing.expect_value(t, string(dict_bytes(&s.dict, u32(i+1))), e)
+		testing.expect_value(t, string(dict_bytes(&s.dict, Term_ID(i+1))), e)
 		id, ok := snapshot_find(snap, transmute([]byte)e)
 		testing.expect(t, ok, "an interned term resolves")
-		testing.expect_value(t, id, u32(i+1))
+		testing.expect_value(t, id, Term_ID(i+1))
 	}
 
 	// The epoch table: wall, actor, reason per epoch — "who" is total,
 	// and obuild named nobody.
-	for e in u32(1) ..= u32(4) {
+	for e in Epoch(1) ..= Epoch(4) {
 		m := store_epoch_meta(&s, e)
 		testing.expect_value(t, m.wall, OWALL+u64(e-1))
-		testing.expect_value(t, m.actor, u32(0))
-		testing.expect_value(t, m.reason, u32(0))
+		testing.expect_value(t, m.actor, Term_ID(0))
+		testing.expect_value(t, m.reason, Term_ID(0))
 	}
 
 	// The note sits after epoch 1 and stays in effect to the head.

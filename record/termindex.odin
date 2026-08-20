@@ -25,9 +25,9 @@ import "core:bytes"
 // like the permutations. Replaces whatever s.terms held.
 store_build_term_index :: proc(s: ^Store) {
 	n := len(s.dict.off)
-	ids := make([]u32, n, s.allocator)
+	ids := make([]Term_ID, n, s.allocator)
 	for i in 0 ..< n {
-		ids[i] = u32(i + 1)
+		ids[i] = Term_ID(i + 1)
 	}
 	sort_term_ids(&s.dict, ids)
 	delete(s.terms, s.allocator)
@@ -41,17 +41,17 @@ store_build_term_index :: proc(s: ^Store) {
 // never written or freed; it stays the published set's until that set
 // is released. The writer's step between dict_add and store_publish
 // (RECORD-T-0015).
-store_merge_term_index :: proc(s: ^Store, base: []u32) {
+store_merge_term_index :: proc(s: ^Store, base: []Term_ID) {
 	n := len(s.dict.off)
 	assert(len(base) <= n, "store_merge_term_index: the base index is larger than the dictionary")
-	fresh := make([]u32, n-len(base), s.allocator)
+	fresh := make([]Term_ID, n-len(base), s.allocator)
 	defer delete(fresh, s.allocator)
 	for i in 0 ..< len(fresh) {
-		fresh[i] = u32(len(base) + 1 + i)
+		fresh[i] = Term_ID(len(base) + 1 + i)
 	}
 	sort_term_ids(&s.dict, fresh)
 
-	out := make([]u32, n, s.allocator)
+	out := make([]Term_ID, n, s.allocator)
 	i, j, k := 0, 0, 0
 	for i < len(base) && j < len(fresh) {
 		if bytes.compare(dict_bytes(&s.dict, base[i]), dict_bytes(&s.dict, fresh[j])) < 0 {
@@ -75,7 +75,7 @@ store_merge_term_index :: proc(s: ^Store, base: []u32) {
 // own view of the arena, so a term defined after the set published is
 // a miss by construction.
 @(private)
-term_index_find :: proc(set: ^Index_Set, enc: []byte) -> (id: u32, ok: bool) {
+term_index_find :: proc(set: ^Index_Set, enc: []byte) -> (id: Term_ID, ok: bool) {
 	lo, hi := 0, len(set.terms)
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)
@@ -99,7 +99,7 @@ term_index_find :: proc(set: ^Index_Set, enc: []byte) -> (id: u32, ok: bool) {
 @(private = "file")
 Term_Key :: struct {
 	enc: []byte,
-	id:  u32,
+	id:  Term_ID,
 }
 
 // sort_term_ids sorts ids in place by their arena bytes, through a
@@ -112,7 +112,7 @@ Term_Key :: struct {
 // terms: 43 ms by comparison, 7 ms this way. Encodings are
 // injective, so there are no equal keys and stability does not arise.
 @(private = "file")
-sort_term_ids :: proc(d: ^Dict, ids: []u32) {
+sort_term_ids :: proc(d: ^Dict, ids: []Term_ID) {
 	keys := make([]Term_Key, len(ids), context.temp_allocator)
 	defer delete(keys, context.temp_allocator)
 	for id, i in ids {

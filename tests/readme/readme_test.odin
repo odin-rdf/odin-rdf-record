@@ -28,5 +28,5 @@ readme_example :: proc(t: ^testing.T) {
 	testing.expect_value(t, err, rec.Open_Error.None)
 	testing.expect_value(t, ierr.kind, ingest.Error_Kind.None)
 	testing.expect_value(t, aerr, rec.Apply_Error{})
-	testing.expect_value(t, epoch, u32(1))
+	testing.expect_value(t, epoch, rec.Epoch(1))
 }

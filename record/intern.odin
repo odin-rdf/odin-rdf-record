@@ -53,7 +53,7 @@ Resolve_Datatype :: proc(data: rawptr, iri: rdf.IRI) -> (id: u64, ok: bool)
 // term), and so does "1"^^xsd:boolean. That is RDF term identity; value
 // equality across lexical forms is an engine's business. The inverse
 // of inline_term.
-term_inline :: proc(t: rdf.Term) -> (id: u32, ok: bool) {
+term_inline :: proc(t: rdf.Term) -> (id: Term_ID, ok: bool) {
 	lit, is_lit := t.(rdf.Literal)
 	if !is_lit || lit.language != "" || lit.direction != .None {
 		return 0, false
@@ -62,17 +62,17 @@ term_inline :: proc(t: rdf.Term) -> (id: u32, ok: bool) {
 	case rdf.XSD_BOOLEAN:
 		switch lit.lexical {
 		case "true":
-			return RES_INLINE_FLAG | u32(INLINE_TAG_BOOLEAN) << RES_INLINE_TAG_SHIFT | 1, true
+			return Term_ID(RES_INLINE_FLAG | u32(INLINE_TAG_BOOLEAN) << RES_INLINE_TAG_SHIFT | 1), true
 		case "false":
-			return RES_INLINE_FLAG | u32(INLINE_TAG_BOOLEAN) << RES_INLINE_TAG_SHIFT, true
+			return Term_ID(RES_INLINE_FLAG | u32(INLINE_TAG_BOOLEAN) << RES_INLINE_TAG_SHIFT), true
 		}
 	case rdf.XSD_INTEGER:
 		if v, canon := canonical_integer(lit.lexical); canon {
-			return RES_INLINE_FLAG | u32(INLINE_TAG_INTEGER) << RES_INLINE_TAG_SHIFT | u32(v + i64(RES_INLINE_BIAS)), true
+			return Term_ID(RES_INLINE_FLAG | u32(INLINE_TAG_INTEGER) << RES_INLINE_TAG_SHIFT | u32(v + i64(RES_INLINE_BIAS))), true
 		}
 	case XSD_DATE:
 		if days, canon := canonical_date(lit.lexical); canon {
-			return RES_INLINE_FLAG | u32(INLINE_TAG_DATE) << RES_INLINE_TAG_SHIFT | u32(days + i64(RES_INLINE_BIAS)), true
+			return Term_ID(RES_INLINE_FLAG | u32(INLINE_TAG_DATE) << RES_INLINE_TAG_SHIFT | u32(days + i64(RES_INLINE_BIAS))), true
 		}
 	}
 	return 0, false
@@ -176,7 +176,7 @@ term_encode :: proc(
 // the same table — there is one writer, and this is its scratch.
 Intern :: struct {
 	snap:      Snapshot,
-	pending:   map[string]u32,
+	pending:   map[string]Term_ID,
 	defs:      [dynamic]Term_Def,
 	allocator: runtime.Allocator,
 }
@@ -188,7 +188,7 @@ intern_init :: proc(it: ^Intern, snap: Snapshot, allocator := context.allocator)
 	assert(snap.idx != nil, "intern_init: a released snapshot")
 	it.snap = snap
 	it.allocator = allocator
-	it.pending = make(map[string]u32, allocator)
+	it.pending = make(map[string]Term_ID, allocator)
 	it.defs = make([dynamic]Term_Def, allocator)
 }
 
@@ -222,7 +222,7 @@ intern_defs :: proc(it: ^Intern) -> []Term_Def {
 // identity is global within a store, and scoping a document's labels
 // is the loader's job. Refuses what the encoder refuses, with nothing
 // recorded: an unsupported term leaves the table as it found it.
-intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: u32, err: Term_Error) {
+intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: Term_ID, err: Term_Error) {
 	if iid, inlined := term_inline(t); inlined {
 		return iid, .None
 	}
@@ -244,7 +244,7 @@ intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: u32, err: Term_Error) {
 	// dictionary of 2^31 terms needs more than the 4 GB the arena can
 	// address (DICT_MAX_CHUNKS), so dict_add's .Dict_Overflow fires
 	// first on any path that gets near.
-	id = it.snap.idx.n_terms + 1 + u32(len(it.defs))
+	id = Term_ID(it.snap.idx.n_terms + 1 + u32(len(it.defs)))
 	assert(id & RES_INLINE_FLAG == 0, "intern_term: dictionary ids exhausted")
 	owned := make([]byte, len(enc), it.allocator)
 	copy(owned, enc)
@@ -258,7 +258,7 @@ intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: u32, err: Term_Error) {
 // use); an IRI or a blank node interns like any term. That a label is
 // never a literal, and so never inlined, is the type's doing
 // (rdf.Graph_Label) rather than a check here.
-intern_graph :: proc(it: ^Intern, g: rdf.Graph_Label) -> (id: u32, err: Term_Error) {
+intern_graph :: proc(it: ^Intern, g: rdf.Graph_Label) -> (id: Term_ID, err: Term_Error) {
 	switch v in g {
 	case rdf.IRI:
 		return intern_term(it, v)

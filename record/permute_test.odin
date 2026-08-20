@@ -37,7 +37,7 @@ test_permutations_exact :: proc(t: ^testing.T) {
 
 	// Hand-computed, most-significant component first, G then FactID
 	// breaking ties. The retracted f4 is indexed like anything else.
-	want := [Order][7]u32{
+	want := [Order][7]Fact_ID{
 		.SPOG = {3, 4, 5, 1, 6, 2, 0},
 		.SOPG = {6, 3, 4, 5, 1, 2, 0},
 		.PSOG = {3, 4, 5, 2, 0, 1, 6},
@@ -76,14 +76,14 @@ test_permutations_inline_order :: proc(t: ^testing.T) {
 	pos, _ := inline_integer(4)
 	tru := INLINE_FLAG | u64(INLINE_TAG_BOOLEAN) << INLINE_TAG_SHIFT | 1
 	date := INLINE_FLAG | u64(INLINE_TAG_DATE) << INLINE_TAG_SHIFT | INLINE_BIAS
-	objects := [5]u32{resident_id(pos), 1, resident_id(date), resident_id(tru), resident_id(neg)}
+	objects := [5]Term_ID{resident_id(pos), 1, resident_id(date), resident_id(tru), resident_id(neg)}
 	for o in objects {
 		fact_append(&s, Fact{s = 2, p = 3, o = o, g = 0, assert = 1, retract = LIVE_EPOCH}, false)
 	}
 	store_build_permutations(&s)
 
 	// dict 1 (f1) < true (f3) < -3 (f4) < 4 (f0) < date (f2).
-	want := [5]u32{1, 3, 4, 0, 2}
+	want := [5]Fact_ID{1, 3, 4, 0, 2}
 	testing.expectf(t, slice.equal(s.ord[.OSPG], want[:]), "OSPG: got %v, want %v", s.ord[.OSPG], want)
 	testing.expectf(t, slice.equal(s.ord[.OPSG], want[:]), "OPSG: got %v, want %v", s.ord[.OPSG], want)
 }
@@ -93,14 +93,14 @@ test_permutations_inline_order :: proc(t: ^testing.T) {
 // compare-in-place — with FactID as the fifth element, so "sorted and
 // deterministic" is one check.
 @(private = "file")
-oracle_tuple :: proc(s: ^Store, key: [4]Component, id: u32) -> [5]u32 {
+oracle_tuple :: proc(s: ^Store, key: [4]Component, id: Fact_ID) -> [5]u32 {
 	f := store_fact(s, id)
 	return {
-		fact_component(f, key[0]),
-		fact_component(f, key[1]),
-		fact_component(f, key[2]),
-		fact_component(f, key[3]),
-		id,
+		u32(fact_component(f, key[0])),
+		u32(fact_component(f, key[1])),
+		u32(fact_component(f, key[2])),
+		u32(fact_component(f, key[3])),
+		u32(id),
 	}
 }
 
@@ -119,15 +119,15 @@ oracle_fill :: proc(s: ^Store, seed: u64) {
 	neg, _ := inline_integer(-1)
 	zero, _ := inline_integer(0)
 	one, _ := inline_integer(1)
-	pool := [6]u32{1, 2, 3, resident_id(neg), resident_id(zero), resident_id(one)}
+	pool := [6]Term_ID{1, 2, 3, resident_id(neg), resident_id(zero), resident_id(one)}
 	rng := seed
 	for i in 0 ..< 4096 {
 		r := splitmix_test(&rng)
 		f := Fact{
-			s       = 1 + u32(r%3),
-			p       = 4 + u32((r>>8)%2),
+			s       = 1 + Term_ID(r%3),
+			p       = 4 + Term_ID((r>>8)%2),
 			o       = pool[(r>>16)%6],
-			g       = u32((r >> 24) % 3), // 0 (default) or the "named" ids 1, 2
+			g       = Term_ID((r >> 24) % 3), // 0 (default) or the "named" ids 1, 2
 			assert  = 1,
 			retract = LIVE_EPOCH,
 		}

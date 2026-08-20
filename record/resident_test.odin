@@ -11,15 +11,15 @@ import "core:testing"
 test_resident_id_retag :: proc(t: ^testing.T) {
 	// Dictionary ids pass through unchanged, 0 ("none" and the default
 	// graph) included.
-	testing.expect_value(t, resident_id(0), u32(0))
-	testing.expect_value(t, resident_id(1), u32(1))
-	testing.expect_value(t, resident_id(RESIDENT_ID_LIMIT-1), u32(RESIDENT_ID_LIMIT-1))
+	testing.expect_value(t, resident_id(0), Term_ID(0))
+	testing.expect_value(t, resident_id(1), Term_ID(1))
+	testing.expect_value(t, resident_id(RESIDENT_ID_LIMIT-1), Term_ID(RESIDENT_ID_LIMIT-1))
 
 	// Integers: flag bit 63 -> 31, tag 2 into bits 30..28, payload
 	// rebiased from 2^55 to 2^27. Exact values, hand-computed.
 	cases := [5]struct {
 		v:    i64,
-		want: u32,
+		want: Term_ID,
 	}{
 		{0, 0xA800_0000},
 		{5, 0xA800_0005},
@@ -43,13 +43,13 @@ test_resident_id_retag :: proc(t: ^testing.T) {
 	testing.expect(t, r_min < r_neg && r_neg < r_zero && r_zero < r_five && r_five < r_max, "integers sort numerically")
 
 	// Booleans: raw 0/1 payload, tag 1.
-	testing.expect_value(t, resident_id(INLINE_FLAG | u64(INLINE_TAG_BOOLEAN) << INLINE_TAG_SHIFT), u32(0x9000_0000))
-	testing.expect_value(t, resident_id(INLINE_FLAG | u64(INLINE_TAG_BOOLEAN) << INLINE_TAG_SHIFT | 1), u32(0x9000_0001))
+	testing.expect_value(t, resident_id(INLINE_FLAG | u64(INLINE_TAG_BOOLEAN) << INLINE_TAG_SHIFT), Term_ID(0x9000_0000))
+	testing.expect_value(t, resident_id(INLINE_FLAG | u64(INLINE_TAG_BOOLEAN) << INLINE_TAG_SHIFT | 1), Term_ID(0x9000_0001))
 
 	// Dates: tag 3, offset-binary days since 1970.
 	date_zero := INLINE_FLAG | u64(INLINE_TAG_DATE) << INLINE_TAG_SHIFT | INLINE_BIAS
-	testing.expect_value(t, resident_id(date_zero), u32(0xB800_0000))
-	testing.expect_value(t, resident_id(date_zero + 19_700), u32(0xB800_0000 + 19_700))
+	testing.expect_value(t, resident_id(date_zero), Term_ID(0xB800_0000))
+	testing.expect_value(t, resident_id(date_zero + 19_700), Term_ID(0xB800_0000 + 19_700))
 }
 
 @(private = "file")
@@ -72,10 +72,10 @@ test_dict_arena :: proc(t: ^testing.T) {
 	bb := transmute([]byte)string("\x03some literal")
 	id_a, err_a := dict_add(d, a, s.allocator)
 	testing.expect_value(t, err_a, Load_Error.None)
-	testing.expect_value(t, id_a, u32(1))
+	testing.expect_value(t, id_a, Term_ID(1))
 	id_b, err_b := dict_add(d, bb, s.allocator)
 	testing.expect_value(t, err_b, Load_Error.None)
-	testing.expect_value(t, id_b, u32(2))
+	testing.expect_value(t, id_b, Term_ID(2))
 	testing.expect_value(t, string(dict_bytes(d, 1)), string(a))
 	testing.expect_value(t, string(dict_bytes(d, 2)), string(bb))
 	// Resolution the other way is the term index's (termindex_test.odin);
@@ -93,11 +93,11 @@ test_dict_arena :: proc(t: ^testing.T) {
 	}
 	id_big, err_big := dict_add(d, big, s.allocator)
 	testing.expect_value(t, err_big, Load_Error.None)
-	testing.expect_value(t, id_big, u32(3))
+	testing.expect_value(t, id_big, Term_ID(3))
 	after := transmute([]byte)string("\x01http://example.org/after")
 	id_after, err_after := dict_add(d, after, s.allocator)
 	testing.expect_value(t, err_after, Load_Error.None)
-	testing.expect_value(t, id_after, u32(4))
+	testing.expect_value(t, id_after, Term_ID(4))
 	testing.expect_value(t, len(d.chunks), 3)
 	testing.expect_value(t, string(dict_bytes(d, 2)), string(bb))
 	got_big := dict_bytes(d, 3)
@@ -134,32 +134,32 @@ test_fact_and_epoch_chunks :: proc(t: ^testing.T) {
 	// back exactly, and growth appended chunks rather than moving one.
 	n := u32(FACT_CHUNK_SIZE + 2)
 	for i in 0 ..< n {
-		f := Fact{s = i, p = i + 1, o = i + 2, g = 0, assert = 1, retract = LIVE_EPOCH}
+		f := Fact{s = Term_ID(i), p = Term_ID(i + 1), o = Term_ID(i + 2), g = 0, assert = 1, retract = LIVE_EPOCH}
 		id := fact_append(&s, f, i%3 == 0)
-		testing.expect_value(t, id, i)
+		testing.expect_value(t, id, Fact_ID(i))
 	}
 	testing.expect_value(t, s.n_facts, n)
 	testing.expect_value(t, len(s.facts), 2)
 	first_chunk := raw_data(s.facts[0])
 	for i in 0 ..< n {
-		f := store_fact(&s, i)
-		testing.expect_value(t, f.s, i)
-		testing.expect_value(t, f.o, i+2)
-		testing.expect_value(t, store_derived(&s, i), i%3 == 0)
+		f := store_fact(&s, Fact_ID(i))
+		testing.expect_value(t, f.s, Term_ID(i))
+		testing.expect_value(t, f.o, Term_ID(i+2))
+		testing.expect_value(t, store_derived(&s, Fact_ID(i)), i%3 == 0)
 	}
 	testing.expect(t, raw_data(s.facts[0]) == first_chunk, "chunks never move")
 
 	// The epoch table crosses its boundary the same way.
 	m := u32(EPOCH_CHUNK_SIZE + 2)
 	for e in 1 ..= m {
-		epoch_append(&s, Epoch_Meta{wall = u64(e) * 10, actor = e, reason = 0})
+		epoch_append(&s, Epoch_Meta{wall = u64(e) * 10, actor = Term_ID(e), reason = 0})
 	}
 	testing.expect_value(t, s.n_epochs, m)
 	testing.expect_value(t, len(s.epochs), 2)
 	for e in 1 ..= m {
-		meta := store_epoch_meta(&s, e)
+		meta := store_epoch_meta(&s, Epoch(e))
 		testing.expect_value(t, meta.wall, u64(e)*10)
-		testing.expect_value(t, meta.actor, e)
+		testing.expect_value(t, meta.actor, Term_ID(e))
 	}
 }
 
@@ -175,7 +175,7 @@ test_note_at :: proc(t: ^testing.T) {
 
 	// Notes in log order; two at the same boundary — the later one is
 	// the one in effect.
-	note :: proc(s: ^Store, last_epoch: u32, text: string) {
+	note :: proc(s: ^Store, last_epoch: Epoch, text: string) {
 		p := make([]byte, len(text), s.allocator)
 		copy(p, text)
 		append(&s.notes, Env_Note{last_epoch = last_epoch, payload = p})

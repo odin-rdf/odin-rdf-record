@@ -219,6 +219,18 @@ Reducing `ID` from 64 to 32 bits is the only narrowing in this document with a
 real cost, and it is worth being precise about where the cost is — because it is
 not where it looks.
 
+> **Amended 2026-08-20 (RECORD-T-0020, `v0.3.0`).** The resident ids are three
+> *distinct* Odin types, not one: `Term_ID` (a dictionary id or an inlined
+> term — this section's `ID`), `Fact_ID` (a position in the fact table — the
+> `FactID` the permutations hold and `scan_next` yields) and `Epoch` (a commit
+> number; 0 the empty world, `LIVE_EPOCH` a live fact's retract). All three are
+> `u32` underneath, so nothing about width, inlining or the encoding below
+> changes; what changes is that a fact id handed to `snapshot_term`, or an epoch
+> where a term id goes, no longer compiles. Counts (`n_facts`, `n_terms`,
+> `snapshot_terms`) stay `u32`, and a conversion is written out where an id is
+> compared against its table's size. The pseudocode in this document keeps its
+> original spelling; `record/ids.odin` is the authority on the types.
+
 **Cardinality is not the constraint.** There are ~10⁵ distinct terms against a
 `u32` ceiling of 4.3×10⁹, a margin of 40,000×. The format has already made this
 bet in the more aggressive direction: `log.md` §3 and §5.4 both store *fact* IDs
@@ -817,6 +829,12 @@ and the ordering is the part that should drive the work.
 ---
 
 ## 12. The pattern-matching API
+
+> **Amended 2026-08-20 (RECORD-T-0020).** Where this section writes `u32` for
+> an id, read the distinct type: `Pattern`, `Quad`, `Fact.s/p/o/g`,
+> `Epoch_Meta.actor/reason` and `snapshot_resolve` carry `Term_ID`; `scan_next`,
+> `snapshot_fact` and the permutations carry `Fact_ID`; `Snapshot.epoch`,
+> `store_at` and `snapshot_epoch_meta` carry `Epoch`. See §3's amendment.
 
 The interface over everything above. It is drafted against one constraint that
 shapes all of it: **a SPARQL engine will eventually sit on this, and so will a

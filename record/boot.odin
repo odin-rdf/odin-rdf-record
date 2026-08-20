@@ -122,7 +122,7 @@ store_open :: proc(
 		// store_note_at answers about this boot without another replay.
 		cloned := make([]byte, len(current), s.allocator)
 		copy(cloned, current)
-		append(&s.notes, Env_Note{last_epoch = u32(w.prev_epoch), payload = cloned})
+		append(&s.notes, Env_Note{last_epoch = Epoch(w.prev_epoch), payload = cloned})
 	}
 
 	return tear, .None, .None, .None

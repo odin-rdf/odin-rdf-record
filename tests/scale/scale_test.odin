@@ -362,14 +362,14 @@ mirror_consumer :: proc(m: ^Mirror) -> rec.Consumer {
 			ok: bool
 			switch op.op {
 			case .Assert, .Assert_Derived:
-				f := rec.store_fact(m.s, m.n)^
-				ok = f.s == q.s && f.p == q.p && f.o == q.o && f.g == q.g && f.assert == u32(epoch)
+				f := rec.store_fact(m.s, rec.Fact_ID(m.n))^
+				ok = f.s == q.s && f.p == q.p && f.o == q.o && f.g == q.g && f.assert == rec.Epoch(epoch)
 				testing.expect(m.t, ok, "an assert lands at its positional fact id")
 				m.live[q] = m.n
 				m.n += 1
 			case .Retract, .Retract_Derived:
 				id, was_live := m.live[q]
-				ok = was_live && rec.store_fact(m.s, id).retract == u32(epoch)
+				ok = was_live && rec.store_fact(m.s, rec.Fact_ID(id)).retract == rec.Epoch(epoch)
 				testing.expect(m.t, ok, "a retract resolved to the live generation")
 				delete_key(&m.live, q)
 			}
@@ -401,7 +401,7 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(ld.live), live)
 	n_live: int
 	for id in u32(0) ..< s.n_facts {
-		if rec.store_fact(&s, id).retract == rec.LIVE_EPOCH {
+		if rec.store_fact(&s, rec.Fact_ID(id)).retract == rec.LIVE_EPOCH {
 			n_live += 1
 		}
 	}
@@ -454,11 +454,11 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	// brute-force scan of the whole fact table.
 	rec.store_build_term_index(&s)
 	rec.store_publish(&s)
-	for epoch in ([2]u32{s.published, s.published / 2}) {
+	for epoch in ([2]rec.Epoch{s.published, s.published / 2}) {
 		snap, serr := rec.store_at(&s, epoch)
 		testing.expect_value(t, serr, rec.Snapshot_Error.None)
 		for probe in 0 ..< 4 {
-			f := rec.store_fact(&s, u32(probe) * (s.n_facts / 4))
+			f := rec.store_fact(&s, rec.Fact_ID(u32(probe) * (s.n_facts / 4)))
 			pats := [4]rec.Pattern{
 				{s = f.s},
 				{p = f.p},
@@ -468,12 +468,12 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 			for p in pats {
 				want := 0
 				for id in u32(0) ..< s.n_facts {
-					c := rec.store_fact(&s, id)
+					c := rec.store_fact(&s, rec.Fact_ID(id))
 					if p.s != 0 && c.s != p.s do continue
 					if p.p != 0 && c.p != p.p do continue
 					if p.o != 0 && c.o != p.o do continue
 					if p.g != 0 {
-						pg := u32(0) if p.g == rec.MATCH_DEFAULT_GRAPH else p.g
+						pg := rec.Term_ID(0) if p.g == rec.MATCH_DEFAULT_GRAPH else p.g
 						if c.g != pg do continue
 					}
 					if !(c.assert <= epoch && epoch < c.retract) do continue
@@ -740,9 +740,9 @@ test_scale_bulk_apply :: proc(t: ^testing.T) {
 	epoch, _, aerr := rec.apply(&s, {ops = b.ops[:], actor = rdf.IRI("http://example.org/isms/importer")})
 	apply_ms := time.duration_milliseconds(time.tick_since(start))
 	testing.expect_value(t, aerr, rec.Apply_Error{})
-	testing.expect_value(t, epoch, u32(1))
+	testing.expect_value(t, epoch, rec.Epoch(1))
 	testing.expect_value(t, s.n_facts, u32(OPS_TOTAL))
-	testing.expect_value(t, s.published, u32(1))
+	testing.expect_value(t, s.published, rec.Epoch(1))
 	bytes := 0
 	for f in fs.files {
 		bytes += len(f.data)
@@ -819,7 +819,7 @@ test_scale_commit_latency :: proc(t: ^testing.T) {
 		e, _, cerr := rec.apply(&s, {ops = ops[:n], actor = rdf.IRI("http://example.org/isms/editor")})
 		times[i] = time.duration_milliseconds(time.tick_since(start))
 		testing.expect_value(t, cerr, rec.Apply_Error{})
-		testing.expect_value(t, e, u32(i+2))
+		testing.expect_value(t, e, rec.Epoch(i+2))
 	}
 	lo, hi, sum := times[0], times[0], 0.0
 	for x in times {

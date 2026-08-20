@@ -18,7 +18,7 @@ import "rdf:rdf"
 // are positional over asserts; intervals in comments.
 @(private = "file")
 RT :: struct {
-	five:  u32, // the inlined integer 5, resident
+	five:  Term_ID, // the inlined integer 5, resident
 	terms: u64, // dictionary terms defined
 }
 
@@ -97,8 +97,8 @@ rt_build :: proc(t: ^testing.T, fs: ^OFS, s: ^Store) -> (rt: RT) {
 // against the pattern, the epoch, and the filters directly on the
 // fact table — no permutation, no binary search, no scan.
 @(private = "file")
-oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter) -> (out: [dynamic]u32) {
-	for id in u32(0) ..< snap.idx.n_facts {
+oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter) -> (out: [dynamic]Fact_ID) {
+	for id in Fact_ID(0) ..< Fact_ID(snap.idx.n_facts) {
 		fact := store_fact(snap.store, id)
 		if p.s != 0 && fact.s != p.s {
 			continue
@@ -110,7 +110,7 @@ oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter) -> (out: [dynamic]
 			continue
 		}
 		if p.g != 0 {
-			want := u32(0) if p.g == MATCH_DEFAULT_GRAPH else p.g
+			want := Term_ID(0) if p.g == MATCH_DEFAULT_GRAPH else p.g
 			if fact.g != want {
 				continue
 			}
@@ -139,7 +139,7 @@ oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter) -> (out: [dynamic]
 }
 
 @(private = "file")
-scan_collect :: proc(r: Range, f: Filter) -> (out: [dynamic]u32) {
+scan_collect :: proc(r: Range, f: Filter) -> (out: [dynamic]Fact_ID) {
 	sc := range_iter(r, f)
 	for id in scan_next(&sc) {
 		append(&out, id)
@@ -176,13 +176,13 @@ test_read_oracle :: proc(t: ^testing.T) {
 		{s = 9}, // a term that is never a subject
 	}
 	origins := [3]Origin{.Any, .Asserted, .Derived}
-	g4 := [1]u32{4}
-	gd := [1]u32{MATCH_DEFAULT_GRAPH}
-	both := [2]u32{MATCH_DEFAULT_GRAPH, 4}
-	graph_sets := [4][]u32{nil, gd[:], g4[:], both[:]}
+	g4 := [1]Term_ID{4}
+	gd := [1]Term_ID{MATCH_DEFAULT_GRAPH}
+	both := [2]Term_ID{MATCH_DEFAULT_GRAPH, 4}
+	graph_sets := [4][]Term_ID{nil, gd[:], g4[:], both[:]}
 
 	checked := 0
-	for epoch in u32(0) ..= 4 {
+	for epoch in Epoch(0) ..= 4 {
 		snap, serr := store_at(&s, epoch)
 		testing.expect_value(t, serr, Snapshot_Error.None)
 		for p in pats {
@@ -218,7 +218,7 @@ test_read_oracle :: proc(t: ^testing.T) {
 	// epoch 4, any origin, no graph filter — f2, f3, f4, f5 live.
 	snap, _ := store_latest(&s)
 	got := scan_collect(snapshot_match(snap, {}), {origin = .Any})
-	want := [4]u32{2, 3, 4, 5}
+	want := [4]Fact_ID{2, 3, 4, 5}
 	testing.expect(t, slice.equal(got[:], want[:]), "the head's live set, by hand")
 	delete(got)
 	snapshot_release(&snap)
@@ -289,7 +289,7 @@ test_read_resolve :: proc(t: ^testing.T) {
 	// case-insensitively (RDF term identity lowercases it).
 	cases := [?]struct {
 		t:    rdf.Term,
-		want: u32,
+		want: Term_ID,
 	}{
 		{rdf.IRI("http://ex/alice"), 1},
 		{rdf.IRI("http://ex/knows"), 2},
@@ -312,10 +312,10 @@ test_read_resolve :: proc(t: ^testing.T) {
 	testing.expect_value(t, five, rt.five)
 	tru, okt := snapshot_resolve(snap, rdf.Literal{lexical = "true", datatype = rdf.XSD_BOOLEAN})
 	testing.expect(t, okt, "a canonical boolean inlines")
-	testing.expect_value(t, tru, RES_INLINE_FLAG|u32(INLINE_TAG_BOOLEAN)<<RES_INLINE_TAG_SHIFT|1)
+	testing.expect_value(t, tru, Term_ID(RES_INLINE_FLAG|u32(INLINE_TAG_BOOLEAN)<<RES_INLINE_TAG_SHIFT|1))
 	date, okd := snapshot_resolve(snap, rdf.Literal{lexical = "1970-01-05", datatype = XSD_DATE})
 	testing.expect(t, okd, "a canonical date inlines")
-	testing.expect_value(t, date, RES_INLINE_FLAG|u32(INLINE_TAG_DATE)<<RES_INLINE_TAG_SHIFT|(RES_INLINE_BIAS+4))
+	testing.expect_value(t, date, Term_ID(RES_INLINE_FLAG|u32(INLINE_TAG_DATE)<<RES_INLINE_TAG_SHIFT|(RES_INLINE_BIAS+4)))
 
 	// Misses, each an ordinary cheap case: an unseen IRI, a
 	// non-canonical integer, an invalid date, a literal whose datatype
@@ -341,7 +341,7 @@ test_read_resolve :: proc(t: ^testing.T) {
 	testing.expect_value(t, aerr, Load_Error.None)
 	_, late_ok := snapshot_resolve(snap, rdf.IRI("http://ex/late"))
 	testing.expect(t, !late_ok, "a post-publication term is unknown to the snapshot")
-	testing.expect_value(t, late, u32(9))
+	testing.expect_value(t, late, Term_ID(9))
 	store_build_permutations(&s)
 	store_merge_term_index(&s, snap.idx.terms)
 	store_publish(&s)
@@ -387,7 +387,7 @@ test_read_kind :: proc(t: ^testing.T) {
 	want := [?]Term_Kind{.IRI, .Blank, .Literal, .Literal, .IRI, .Literal, .IRI, .IRI}
 	buf: [INLINE_LEXICAL_MAX]byte
 	for k, i in want {
-		id := u32(i + 1)
+		id := Term_ID(i + 1)
 		testing.expect_value(t, snapshot_kind(snap, id), k)
 		term, ok := snapshot_term(snap, id, buf[:])
 		testing.expectf(t, ok, "id %d decodes", id)
@@ -433,7 +433,7 @@ test_read_bytes_and_term :: proc(t: ^testing.T) {
 	// Term and Resolve are inverses over every dictionary id — the
 	// injectivity of the canonical encoding, exercised end to end.
 	buf: [INLINE_LEXICAL_MAX]u8
-	for id in u32(1) ..= u32(rt.terms) {
+	for id in Term_ID(1) ..= Term_ID(rt.terms) {
 		term, ok := snapshot_term(snap, id, buf[:])
 		testing.expectf(t, ok, "id %d materializes", id)
 		back, rok := snapshot_resolve(snap, term)
@@ -465,6 +465,6 @@ test_read_bytes_and_term :: proc(t: ^testing.T) {
 	// Refusals: id 0 and an id past the snapshot are not terms.
 	_, z_ok := snapshot_term(snap, 0, buf[:])
 	testing.expect(t, !z_ok, "id 0 is 'none', not a term")
-	_, past_ok := snapshot_term(snap, u32(rt.terms)+1, buf[:])
+	_, past_ok := snapshot_term(snap, Term_ID(rt.terms)+1, buf[:])
 	testing.expect(t, !past_ok, "an id past the snapshot is unknown")
 }

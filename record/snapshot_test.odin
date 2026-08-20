@@ -12,7 +12,7 @@ import "core:testing"
 // epoch answers identically before and after later epochs exist.
 
 @(private = "file")
-snap_fact :: proc(s: ^Store, sub, obj, from, until: u32, derived := false) -> u32 {
+snap_fact :: proc(s: ^Store, sub, obj: Term_ID, from, until: Epoch, derived := false) -> Fact_ID {
 	return fact_append(s, Fact{s = sub, p = 2, o = obj, g = 0, assert = from, retract = until}, derived)
 }
 
@@ -35,7 +35,7 @@ test_snapshot_lifecycle :: proc(t: ^testing.T) {
 	store_publish(&s)
 
 	// Publication moved the permutations into the set.
-	testing.expect_value(t, s.published, u32(2))
+	testing.expect_value(t, s.published, Epoch(2))
 	testing.expect_value(t, len(s.ord[.SPOG]), 0)
 	testing.expect_value(t, len(s.idx.ord[.SPOG]), 2)
 	testing.expect_value(t, s.idx.refs, 1)
@@ -43,7 +43,7 @@ test_snapshot_lifecycle :: proc(t: ^testing.T) {
 	// Acquire pins; every acquire is one reference.
 	latest, lerr := store_latest(&s)
 	testing.expect_value(t, lerr, Snapshot_Error.None)
-	testing.expect_value(t, latest.epoch, u32(2))
+	testing.expect_value(t, latest.epoch, Epoch(2))
 	testing.expect_value(t, snapshot_terms(latest), u32(0))
 	old, aerr := store_at(&s, 1)
 	testing.expect_value(t, aerr, Snapshot_Error.None)
@@ -104,7 +104,7 @@ test_snapshot_visibility_exact :: proc(t: ^testing.T) {
 		{false, false, true},  // epoch 4: retracted again
 	}
 	for row, e in want {
-		snap, err := store_at(&s, u32(e))
+		snap, err := store_at(&s, Epoch(e))
 		testing.expect_value(t, err, Snapshot_Error.None)
 		testing.expect_value(t, snapshot_visible(snap, f0), row[0])
 		testing.expect_value(t, snapshot_visible(snap, f1), row[1])
@@ -114,7 +114,7 @@ test_snapshot_visibility_exact :: proc(t: ^testing.T) {
 
 	// Latest is At(published), and origin reads from the set's copy.
 	latest, _ := store_latest(&s)
-	testing.expect_value(t, latest.epoch, u32(4))
+	testing.expect_value(t, latest.epoch, Epoch(4))
 	testing.expect_value(t, snapshot_derived(latest, f0), false)
 	testing.expect_value(t, snapshot_derived(latest, f1), true)
 	testing.expect_value(t, snapshot_derived(latest, f2), false)
@@ -153,7 +153,7 @@ test_snapshot_publication_discipline :: proc(t: ^testing.T) {
 	epoch_append(&s, Epoch_Meta{wall = 4})
 
 	pinned, _ := store_latest(&s)
-	testing.expect_value(t, pinned.epoch, u32(3))
+	testing.expect_value(t, pinned.epoch, Epoch(3))
 	testing.expect(t, !snapshot_visible(pinned, f2), "an unpublished fact is unobservable")
 	testing.expect(t, snapshot_visible(pinned, f0), "an unpublished retraction is unobservable")
 	testing.expect(t, !snapshot_visible(pinned, f1), "f1's interval ended at 3")
@@ -166,7 +166,7 @@ test_snapshot_publication_discipline :: proc(t: ^testing.T) {
 	store_build_term_index(&s)
 	store_publish(&s)
 	testing.expect(t, s.idx != set1, "a fresh set was installed")
-	testing.expect_value(t, s.published, u32(4))
+	testing.expect_value(t, s.published, Epoch(4))
 	testing.expect_value(t, set1.refs, 2) // hist and pinned; the store moved on
 
 	hist2, _ := store_at(&s, 2)
@@ -175,7 +175,7 @@ test_snapshot_publication_discipline :: proc(t: ^testing.T) {
 	testing.expect_value(t, snapshot_visible(hist2, f2), false)
 
 	latest, _ := store_latest(&s)
-	testing.expect_value(t, latest.epoch, u32(4))
+	testing.expect_value(t, latest.epoch, Epoch(4))
 	testing.expect(t, !snapshot_visible(latest, f0), "the retraction published")
 	testing.expect(t, snapshot_visible(latest, f2), "the new fact published")
 

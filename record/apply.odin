@@ -114,7 +114,7 @@ Apply_Error :: struct {
 // a fact stores it.
 Resident_Op :: struct {
 	kind:       Op_Kind,
-	s, p, o, g: u32,
+	s, p, o, g: Term_ID,
 }
 
 // Validator is the validation hook (RECORD-A-0006): wired once at
@@ -152,7 +152,7 @@ Validator :: struct {
 // returning; everything the store keeps comes from the store's own.
 // The wall time is this clock, Unix nanoseconds UTC: evidence, not
 // proof (api.md par. 2.4).
-apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch: u32, conforms: bool, err: Apply_Error) {
+apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch: Epoch, conforms: bool, err: Apply_Error) {
 	conforms = true
 	if len(c.ops) == 0 {
 		return 0, conforms, {.Empty, -1}
@@ -163,7 +163,7 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 	head, herr := store_latest(s)
 	assert(herr == .None, "apply: a store that never published — store_open publishes before it returns")
 	defer snapshot_release(&head)
-	assert(head.idx.epoch == s.n_epochs, "apply: the published epoch is not the store's last")
+	assert(u32(head.idx.epoch) == s.n_epochs, "apply: the published epoch is not the store's last")
 	if head.idx.epoch >= LIVE_EPOCH-1 {
 		return 0, conforms, {.Epoch_Exhausted, -1}
 	}
@@ -194,7 +194,7 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 		}
 		plan[i] = Plan_Op{kind = op.kind, q = q}
 	}
-	actor, reason: u32
+	actor, reason: Term_ID
 	if c.actor != nil {
 		a, terr := intern_term(&it, c.actor)
 		if terr != .None || a&RES_INLINE_FLAG != 0 {
@@ -217,7 +217,7 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 	defer delete(effects)
 	n_asserts := 0
 	for &p, i in plan {
-		live, from_head, id := liveness(head, &effects, p.q)
+		live, from_head, fact, pending := liveness(head, &effects, p.q)
 		switch p.kind {
 		case .Assert:
 			if live {
@@ -229,7 +229,8 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 			if !live {
 				return 0, conforms, {.Not_Live, i}
 			}
-			p.target = id
+			p.target = fact
+			p.pending = pending
 			p.target_pending = !from_head
 			effects[p.q] = Effect{live = false}
 		case .Assert_Derived, .Retract_Derived:
@@ -239,9 +240,9 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 
 	// Mutate, in writer-private state: from here on, one rollback.
 	mark := take_mark(s)
-	touched := make([dynamic]u32, allocator)
+	touched := make([dynamic]Fact_ID, allocator)
 	defer delete(touched)
-	appended := make([]u32, n_asserts, allocator)
+	appended := make([]Fact_ID, n_asserts, allocator)
 	defer delete(appended, allocator)
 
 	for def in intern_defs(&it) {
@@ -259,7 +260,7 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 			appended[k] = fact_append(s, Fact{s = p.q.s, p = p.q.p, o = p.q.o, g = p.q.g, assert = E, retract = LIVE_EPOCH}, false)
 			k += 1
 		case .Retract:
-			id := appended[p.target] if p.target_pending else p.target
+			id := appended[p.pending] if p.target_pending else p.target
 			sync.atomic_store_explicit(&store_fact(s, id).retract, E, .Relaxed)
 			if !p.target_pending {
 				append(&touched, id)
@@ -335,7 +336,8 @@ store_close :: proc(s: ^Store) -> Writer_Error {
 Plan_Op :: struct {
 	kind:           Op_Kind,
 	q:              Quad,
-	target:         u32,
+	target:         Fact_ID, // the head fact this retract ends, when !target_pending
+	pending:        int, // the index among this changeset's asserts, when target_pending
 	target_pending: bool,
 }
 
@@ -353,14 +355,14 @@ Effect :: struct {
 // published SPO order — a prefix range with the graph residual, first
 // hit — which is snapshot_exists with the id kept.
 @(private = "file")
-liveness :: proc(head: Snapshot, effects: ^map[Quad]Effect, q: Quad) -> (live: bool, from_head: bool, id: u32) {
+liveness :: proc(head: Snapshot, effects: ^map[Quad]Effect, q: Quad) -> (live: bool, from_head: bool, fact: Fact_ID, pending: int) {
 	if e, seen := effects[q]; seen {
-		return e.live, false, u32(e.pending)
+		return e.live, false, 0, e.pending
 	}
 	g := q.g if q.g != 0 else MATCH_DEFAULT_GRAPH
 	sc := range_iter(snapshot_match(head, {s = q.s, p = q.p, o = q.o, g = g}), {origin = .Any})
 	fid, hit := scan_next(&sc)
-	return hit, true, fid
+	return hit, true, fid, 0
 }
 
 // Mark is the projection's high-water marks before an apply mutates
@@ -407,7 +409,7 @@ take_mark :: proc(s: ^Store) -> Mark {
 // the same thing to a reader at or below the published epoch as the
 // closed one did.
 @(private = "file")
-rollback :: proc(s: ^Store, m: Mark, touched: []u32) {
+rollback :: proc(s: ^Store, m: Mark, touched: []Fact_ID) {
 	for id in touched {
 		sync.atomic_store_explicit(&store_fact(s, id).retract, LIVE_EPOCH, .Relaxed)
 	}
@@ -439,7 +441,7 @@ rollback :: proc(s: ^Store, m: Mark, touched: []u32) {
 // disk_id re-tags a resident id for the log: dictionary ids pass
 // through, inlined ids go back to the on-disk scheme.
 @(private = "file")
-disk_id :: proc(id: u32) -> u64 {
+disk_id :: proc(id: Term_ID) -> u64 {
 	if id & RES_INLINE_FLAG != 0 {
 		return res_inline_disk(id)
 	}

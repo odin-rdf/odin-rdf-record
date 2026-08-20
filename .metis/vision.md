@@ -99,6 +99,12 @@ their side, once that API is real.
 > now emit the document's *set* (RECORD-T-0019); `apply` is unchanged.
 > Tagged `v0.2.0`, the pin odin-rdf-shacl's port moves to.
 
+> **Amended 2026-08-20, later still (`v0.3.0`).** The second sibling-port
+> finding: four id spaces shared one `u32`. The resident ids are now three
+> distinct types — `Term_ID`, `Fact_ID`, `Epoch` — across the public API and
+> the store's own code (RECORD-T-0020); widths, format and sentinels are
+> unchanged. Tagged `v0.3.0`; the siblings adopt the types at their next pin.
+
 ## Future State
 
 An embedded store where:

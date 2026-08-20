@@ -23,7 +23,7 @@ import "core:sync"
 // `assert <= e && e < retract` with no special case. Real epochs are
 // therefore bounded one below it — the load path refuses a log that
 // reaches it, four billion commits away from the design scale.
-LIVE_EPOCH :: u32(0xFFFF_FFFF)
+LIVE_EPOCH :: Epoch(0xFFFF_FFFF)
 
 // The resident inline-term encoding (api.md par. 3): bit 31 flags an
 // inlined term, bits 30..28 tag its type with the same tag values the
@@ -32,10 +32,12 @@ LIVE_EPOCH :: u32(0xFFFF_FFFF)
 // so inlined values still sort numerically. Tag 0 is reserved so that
 // 0x8000_0000 decodes as invalid rather than as a plausible term.
 // RECORD-A-0001 froze both schemes together; resident_id is the bridge.
-RES_INLINE_FLAG :: u32(1) << 31
+// Untyped, so they apply to a Term_ID and to a raw u32 alike — the
+// representation is what they describe.
+RES_INLINE_FLAG :: 1 << 31
 RES_INLINE_TAG_SHIFT :: 28
-RES_INLINE_PAYLOAD_MASK :: (u32(1) << 28) - 1
-RES_INLINE_BIAS :: u32(1) << 27
+RES_INLINE_PAYLOAD_MASK :: (1 << 28) - 1
+RES_INLINE_BIAS :: 1 << 27
 
 // CONSUMER_ID_FIRST ..= CONSUMER_ID_LAST is the range of u32 values
 // that can never name a term (api.md par. 3, amended; RECORD-I-0003
@@ -47,8 +49,8 @@ RES_INLINE_BIAS :: u32(1) << 27
 // id. The store never sees such an id: no procedure accepts one, no
 // check for one exists, and 0x8000_0000 below the range is
 // MATCH_DEFAULT_GRAPH, the one reserved pattern the store does use.
-CONSUMER_ID_FIRST :: u32(0x8000_0001)
-CONSUMER_ID_LAST :: u32(0x8FFF_FFFF)
+CONSUMER_ID_FIRST :: Term_ID(0x8000_0001)
+CONSUMER_ID_LAST :: Term_ID(0x8FFF_FFFF)
 
 // resident_id re-tags one on-disk term id (u64) as a resident id
 // (u32): dictionary ids pass through unchanged, and inlined ids move
@@ -59,21 +61,21 @@ CONSUMER_ID_LAST :: u32(0x8FFF_FFFF)
 // inlined ids outside RECORD-A-0001's frozen range (.Inline_Range) —
 // and the asserts state that precondition rather than widen the
 // contract.
-resident_id :: proc(id: u64) -> u32 {
+resident_id :: proc(id: u64) -> Term_ID {
 	if id & INLINE_FLAG == 0 {
 		assert(id < RESIDENT_ID_LIMIT, "resident_id: a dictionary id past the resident scheme")
-		return u32(id)
+		return Term_ID(id)
 	}
 	tag := u8(id >> INLINE_TAG_SHIFT) & 0x7F
 	payload := id & INLINE_PAYLOAD_MASK
 	switch tag {
 	case INLINE_TAG_BOOLEAN:
 		assert(payload <= 1, "resident_id: a boolean payload past one")
-		return RES_INLINE_FLAG | u32(tag) << RES_INLINE_TAG_SHIFT | u32(payload)
+		return Term_ID(RES_INLINE_FLAG | u32(tag) << RES_INLINE_TAG_SHIFT | u32(payload))
 	case INLINE_TAG_INTEGER, INLINE_TAG_DATE:
 		v := i64(payload) - i64(INLINE_BIAS)
 		assert(v >= INLINE_VALUE_MIN && v <= INLINE_VALUE_MAX, "resident_id: a payload outside the frozen range")
-		return RES_INLINE_FLAG | u32(tag) << RES_INLINE_TAG_SHIFT | u32(v + i64(RES_INLINE_BIAS))
+		return Term_ID(RES_INLINE_FLAG | u32(tag) << RES_INLINE_TAG_SHIFT | u32(v + i64(RES_INLINE_BIAS)))
 	}
 	panic("resident_id: an inline tag outside RECORD-A-0001's frozen scheme")
 }
@@ -86,16 +88,16 @@ resident_id :: proc(id: u64) -> u32 {
 // store's derived bitset (api.md par. 2.2), keeping the visibility
 // test's cache lines free of a field it never reads.
 Fact :: struct {
-	s, p, o, g: u32, // resident term ids
-	assert:     u32, // the epoch that asserted this generation
-	retract:    u32, // the epoch that retracted it; LIVE_EPOCH while live
+	s, p, o, g: Term_ID, // resident term ids
+	assert:     Epoch, // the epoch that asserted this generation
+	retract:    Epoch, // the epoch that retracted it; LIVE_EPOCH while live
 }
 
 // Quad is a resident quad value — the four components of a Fact
 // without its interval. The load path keys its transient live map on
 // it, and the read API's pattern type will share its shape.
 Quad :: struct {
-	s, p, o, g: u32,
+	s, p, o, g: Term_ID,
 }
 
 // The fact table's chunking (api.md par. 2.3): 8192 facts per chunk,
@@ -110,8 +112,8 @@ FACT_CHUNK_MASK :: FACT_CHUNK_SIZE - 1
 // commit shares one actor.
 Epoch_Meta :: struct {
 	wall:   u64, // Unix nanoseconds UTC; advisory (log.md par. 5.1)
-	actor:  u32, // dictionary id, 0 if none
-	reason: u32, // dictionary id, 0 if none
+	actor:  Term_ID, // dictionary id, 0 if none
+	reason: Term_ID, // dictionary id, 0 if none
 }
 
 // The epoch table's chunking: same discipline as the fact table, 8192
@@ -125,7 +127,7 @@ EPOCH_CHUNK_MASK :: EPOCH_CHUNK_SIZE - 1
 // so that a derived fact's epoch can resolve to the note in effect at
 // the time (api.md par. 12.6) — a few hundred entries at most.
 Env_Note :: struct {
-	last_epoch: u32,
+	last_epoch: Epoch,
 	payload:    []byte,
 }
 
@@ -174,10 +176,10 @@ Store :: struct {
 	epochs:    [dynamic][]Epoch_Meta, // EPOCH_CHUNK_SIZE-entry chunks, indexed by epoch-1
 	n_epochs:  u32, // committed epochs; equals the last epoch, since epochs are contiguous from 1
 	notes:     [dynamic]Env_Note, // in log order; last_epoch is non-decreasing
-	ord:       [Order][]u32, // the six sorted FactID permutations (permute.odin); moved into an Index_Set on publish
-	terms:     []u32, // the term index — dictionary ids sorted by encoding (termindex.odin); moved into an Index_Set on publish
+	ord:       [Order][]Fact_ID, // the six sorted Fact_ID permutations (permute.odin); moved into an Index_Set on publish
+	terms:     []Term_ID, // the term index — dictionary ids sorted by encoding (termindex.odin); moved into an Index_Set on publish
 	idx:       ^Index_Set, // the published index set (snapshot.odin); nil until the first publish; swapped under mu
-	published: u32, // the published epoch (log.md par. 7.1 step 5); stored after idx, under mu
+	published: Epoch, // the published epoch (log.md par. 7.1 step 5); stored after idx, under mu
 	mu:        sync.Mutex, // taken by acquire (store_latest, store_at) and by publish, and by nothing else (RECORD-I-0003 decision 3)
 	writer:    Writer, // the single writer of the store's directory, resumed by store_open; apply commits through it
 	write_err: Writer_Error, // the writer's last refusal, set by apply beside its .Writer
@@ -243,15 +245,15 @@ store_destroy :: proc(s: ^Store) {
 // store's own chunk list, which the writer grows. A reader goes
 // through its snapshot (snapshot_fact), whose set holds the list as
 // it stood at publication.
-store_fact :: proc(s: ^Store, id: u32) -> ^Fact {
-	assert(id < s.n_facts, "store_fact: a fact id past the table")
+store_fact :: proc(s: ^Store, id: Fact_ID) -> ^Fact {
+	assert(u32(id) < s.n_facts, "store_fact: a fact id past the table")
 	return fact_in(s.facts[:], id)
 }
 
 // fact_in indexes a fact chunk list — the one shape shared by the
 // writer's store_fact and the reader's snapshot_fact.
 @(private)
-fact_in :: proc(chunks: [][]Fact, id: u32) -> ^Fact {
+fact_in :: proc(chunks: [][]Fact, id: Fact_ID) -> ^Fact {
 	return &chunks[id >> FACT_CHUNK_BITS][id & FACT_CHUNK_MASK]
 }
 
@@ -259,16 +261,16 @@ fact_in :: proc(chunks: [][]Fact, id: u32) -> ^Fact {
 // (api.md par. 2.2): true if the fact was inferred rather than
 // recorded — the distinction architecture.md A.5 requires an auditor
 // to always see.
-store_derived :: proc(s: ^Store, id: u32) -> bool {
-	assert(id < s.n_facts, "store_derived: a fact id past the table")
+store_derived :: proc(s: ^Store, id: Fact_ID) -> bool {
+	assert(u32(id) < s.n_facts, "store_derived: a fact id past the table")
 	return s.derived[id >> 6] & (u64(1) << (id & 63)) != 0
 }
 
 // store_epoch_meta returns the wall/actor/reason of one committed
 // epoch (api.md par. 2.4). Epochs are contiguous from 1, so the table
 // is dense and the epoch number is the index.
-store_epoch_meta :: proc(s: ^Store, epoch: u32) -> Epoch_Meta {
-	assert(epoch >= 1 && epoch <= s.n_epochs, "store_epoch_meta: an epoch never committed")
+store_epoch_meta :: proc(s: ^Store, epoch: Epoch) -> Epoch_Meta {
+	assert(epoch >= 1 && u32(epoch) <= s.n_epochs, "store_epoch_meta: an epoch never committed")
 	i := epoch - 1
 	return s.epochs[i >> EPOCH_CHUNK_BITS][i & EPOCH_CHUNK_MASK]
 }
@@ -279,7 +281,7 @@ store_epoch_meta :: proc(s: ^Store, epoch: u32) -> Epoch_Meta {
 // store. Notes arrive in log order with non-decreasing last_epoch, so
 // this is one binary search; of several notes at the same boundary the
 // latest wins, being the one in effect.
-store_note_at :: proc(s: ^Store, epoch: u32) -> (payload: []byte, ok: bool) {
+store_note_at :: proc(s: ^Store, epoch: Epoch) -> (payload: []byte, ok: bool) {
 	lo, hi := 0, len(s.notes)
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)
@@ -302,7 +304,7 @@ store_note_at :: proc(s: ^Store, epoch: u32) -> (payload: []byte, ok: bool) {
 // the moment a chunk stops being the last. The writer's accessor over
 // the store's own lists; a reader's is snapshot_bytes, over its set's
 // copies, with the set's n_terms as the bound.
-dict_bytes :: proc(d: ^Dict, id: u32) -> []byte {
+dict_bytes :: proc(d: ^Dict, id: Term_ID) -> []byte {
 	return dict_bytes_in(d.chunks[:], d.used[:], d.off[:], u32(len(d.off)), id)
 }
 
@@ -310,14 +312,14 @@ dict_bytes :: proc(d: ^Dict, id: u32) -> []byte {
 // the caller holds — the store's, or a set's copies of them — bounded
 // by n_terms, the count those lists are consistent for.
 @(private)
-dict_bytes_in :: proc(chunks: [][]byte, used: []u32, off: []u32, n_terms: u32, id: u32) -> []byte {
+dict_bytes_in :: proc(chunks: [][]byte, used: []u32, off: []u32, n_terms: u32, id: Term_ID) -> []byte {
 	assert(id != 0 && id & RES_INLINE_FLAG == 0, "dict_bytes: not a dictionary id")
-	assert(id <= n_terms, "dict_bytes: an id past the dictionary")
+	assert(u32(id) <= n_terms, "dict_bytes: an id past the dictionary")
 	packed := off[id-1]
 	c := int(packed >> DICT_CHUNK_BITS)
 	at := packed & DICT_CHUNK_MASK
 	end := used[c]
-	if id < n_terms {
+	if u32(id) < n_terms {
 		next := off[id]
 		if int(next >> DICT_CHUNK_BITS) == c {
 			end = next & DICT_CHUNK_MASK
@@ -335,7 +337,7 @@ dict_bytes_in :: proc(chunks: [][]byte, used: []u32, off: []u32, n_terms: u32, i
 // write path's intern never presents a duplicate. Refuses an arena
 // past its u32 addressing (.Dict_Overflow).
 @(private)
-dict_add :: proc(d: ^Dict, enc: []byte, allocator: runtime.Allocator) -> (id: u32, err: Load_Error) {
+dict_add :: proc(d: ^Dict, enc: []byte, allocator: runtime.Allocator) -> (id: Term_ID, err: Load_Error) {
 	need := len(enc)
 	if len(d.chunks) == 0 || int(d.used[len(d.used)-1])+need > len(d.chunks[len(d.chunks)-1]) {
 		if len(d.chunks) >= DICT_MAX_CHUNKS {
@@ -350,15 +352,15 @@ dict_add :: proc(d: ^Dict, enc: []byte, allocator: runtime.Allocator) -> (id: u3
 	copy(d.chunks[c][at:], enc)
 	d.used[c] += u32(need)
 	append(&d.off, u32(c) << DICT_CHUNK_BITS | at)
-	return u32(len(d.off)), .None
+	return Term_ID(len(d.off)), .None
 }
 
 // fact_append appends one fact and its origin bit, growing a chunk
 // when the last is full — never relocating one. Returns the fact's
 // positional id (log.md par. 5.3's rule, applied residently).
 @(private)
-fact_append :: proc(s: ^Store, f: Fact, is_derived: bool) -> (id: u32) {
-	id = s.n_facts
+fact_append :: proc(s: ^Store, f: Fact, is_derived: bool) -> (id: Fact_ID) {
+	id = Fact_ID(s.n_facts)
 	if id & FACT_CHUNK_MASK == 0 {
 		append(&s.facts, make([]Fact, FACT_CHUNK_SIZE, s.allocator))
 	}

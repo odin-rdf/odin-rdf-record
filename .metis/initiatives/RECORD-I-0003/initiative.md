@@ -764,3 +764,13 @@ test) still apply.
 **6. Spelling decided in passing.** `Changeset` is one word — the VCS
 and Ecto sense the founding documents use — beside the split
 `Index_Set`; say so in the type's doc comment so it is not re-litigated.
+
+**Amended 2026-08-20, evening (RECORD-T-0020, `v0.3.0`).** The handoff above
+says `u32` wherever it names an id. Since `v0.3.0` the resident ids are
+three distinct types — `Term_ID`, `Fact_ID`, `Epoch` — and a consumer's
+code says which it holds: shacl's `Session.graph` is a `record.Term_ID`,
+`store_at` takes an `Epoch`, `scan_next` yields a `Fact_ID`. The widths and
+the sentinels are unchanged; `MATCH_DEFAULT_GRAPH` and the consumer range
+are `Term_ID`s, `LIVE_EPOCH` an `Epoch`. Point 7's reading of the read API
+and the call-site mapping hold with the types substituted.
+

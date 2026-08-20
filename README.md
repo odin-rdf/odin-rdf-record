@@ -182,6 +182,13 @@ its ID widths by design — `u64` on disk, `u32` resident with an inline range �
 because the inline encoding is frozen at first write (`api.md` §3.3) and a
 build-time knob would put that freeze at the mercy of a flag.
 
+The three resident id spaces are three distinct types — `Term_ID` (a term,
+dictionary or inlined), `Fact_ID` (a position in the fact table) and `Epoch` (a
+commit number) — all `u32` underneath. `Pattern`, `Quad` and `Fact` carry
+`Term_ID`s; `scan_next` yields and `snapshot_fact` takes a `Fact_ID`; `store_at`
+and `Snapshot.epoch` are `Epoch`. A fact id where a term id goes does not
+compile; a conversion is spelled out where one is meant.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

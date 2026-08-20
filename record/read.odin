@@ -22,7 +22,7 @@ import "rdf:rdf"
 // collide with a term. It exists because the natural spelling is
 // taken: facts store the default graph as G = 0 (log.md par. 5.3,
 // amended), and a pattern's 0 means unbound.
-MATCH_DEFAULT_GRAPH :: u32(0x8000_0000)
+MATCH_DEFAULT_GRAPH :: Term_ID(0x8000_0000)
 
 // Pattern is a quad pattern over resident ids: 0 is unbound, anything
 // else must match the fact's component exactly. The zero value matches
@@ -30,7 +30,7 @@ MATCH_DEFAULT_GRAPH :: u32(0x8000_0000)
 // (see above); S, P, and O never need it, because no fact carries 0
 // there.
 Pattern :: struct {
-	s, p, o, g: u32,
+	s, p, o, g: Term_ID,
 }
 
 // Origin selects by provenance (api.md par. 12.5), and it has no
@@ -52,7 +52,7 @@ Origin :: enum u8 {
 // distinct from Pattern.g, which is what GRAPH ?g binds.
 Filter :: struct {
 	origin: Origin,
-	graphs: []u32,
+	graphs: []Term_ID,
 }
 
 // Range is what Match returns: a window into one permutation, the
@@ -65,8 +65,8 @@ Filter :: struct {
 Range :: struct {
 	snap:     Snapshot,
 	order:    Order,
-	main:     []u32,
-	delta:    []u32,
+	main:     []Fact_ID,
+	delta:    []Fact_ID,
 	residual: Pattern,
 }
 
@@ -84,11 +84,11 @@ range_len :: proc(r: Range) -> int {
 // table, and register compares (api.md par. 12.3's stated shape).
 Scan :: struct {
 	snap:    Snapshot,
-	ids:     []u32, // the unconsumed window
+	ids:     []Fact_ID, // the unconsumed window
 	origin:  Origin,
-	graphs:  []u32,
-	s, p, o: u32, // residual component checks; 0 = not checked
-	g_want:  u32, // the stored G value to require when g_bound
+	graphs:  []Term_ID,
+	s, p, o: Term_ID, // residual component checks; 0 = not checked
+	g_want:  Term_ID, // the stored G value to require when g_bound
 	g_bound: bool,
 }
 
@@ -114,7 +114,7 @@ snapshot_match :: proc(snap: Snapshot, p: Pattern) -> Range {
 snapshot_match_as :: proc(snap: Snapshot, p: Pattern, order: Order) -> Range {
 	assert(snap.idx != nil, "snapshot_match_as: a released snapshot")
 	key := order_key(order)
-	want: [3]u32
+	want: [3]Term_ID
 	k := 0
 	for ; k < 3; k += 1 {
 		v := pattern_component(p, key[k])
@@ -159,7 +159,7 @@ range_iter :: proc(r: Range, f: Filter) -> Scan {
 // retract loaded atomically — the one field a live writer mutates, and
 // a mutation a reader misses is invisible by monotonicity), the
 // residual components, origin, and the graph set. False ends the scan.
-scan_next :: proc(sc: ^Scan) -> (id: u32, ok: bool) {
+scan_next :: proc(sc: ^Scan) -> (id: Fact_ID, ok: bool) {
 	candidates: for len(sc.ids) > 0 {
 		id = sc.ids[0]
 		sc.ids = sc.ids[1:]
@@ -209,7 +209,7 @@ scan_next :: proc(sc: ^Scan) -> (id: u32, ok: bool) {
 // cannot encode. The id must have been interned at or before this
 // snapshot's publication: a term the writer added since is a miss
 // here, by the n_terms bound.
-snapshot_resolve :: proc(snap: Snapshot, t: rdf.Term, allocator := context.allocator) -> (id: u32, ok: bool) {
+snapshot_resolve :: proc(snap: Snapshot, t: rdf.Term, allocator := context.allocator) -> (id: Term_ID, ok: bool) {
 	assert(snap.idx != nil, "snapshot_resolve: a released snapshot")
 	if iid, inlined := term_inline(t); inlined {
 		return iid, true
@@ -232,7 +232,7 @@ snapshot_resolve :: proc(snap: Snapshot, t: rdf.Term, allocator := context.alloc
 // term defined after publication is a miss by construction rather
 // than by a bound.
 @(private)
-snapshot_find :: proc(snap: Snapshot, enc: []byte) -> (id: u32, ok: bool) {
+snapshot_find :: proc(snap: Snapshot, enc: []byte) -> (id: Term_ID, ok: bool) {
 	return term_index_find(snap.idx, enc)
 }
 
@@ -252,12 +252,12 @@ Term_Kind :: enum u8 {
 // private to the store so no consumer depends on the tag layout.
 // Allocation-free; asserts on an id this snapshot does not know, as
 // snapshot_bytes does.
-snapshot_kind :: proc(snap: Snapshot, id: u32) -> Term_Kind {
+snapshot_kind :: proc(snap: Snapshot, id: Term_ID) -> Term_Kind {
 	assert(snap.idx != nil, "snapshot_kind: a released snapshot")
 	if id & RES_INLINE_FLAG != 0 {
 		return .Literal
 	}
-	assert(id != 0 && id <= snap.idx.n_terms, "snapshot_kind: not a term of this snapshot")
+	assert(id != 0 && u32(id) <= snap.idx.n_terms, "snapshot_kind: not a term of this snapshot")
 	switch set_bytes(snap.idx, id)[0] {
 	case TERM_TAG_IRI, TERM_TAG_SPLIT_IRI:
 		return .IRI
@@ -281,9 +281,9 @@ snapshot_exists :: proc(snap: Snapshot, p: Pattern, f: Filter) -> bool {
 // view into the arena — no copy, no allocation, valid for the life of
 // the store (api.md par. 12.7). Dictionary ids only: an inlined id has
 // no bytes anywhere, and materializes through snapshot_term.
-snapshot_bytes :: proc(snap: Snapshot, id: u32) -> []byte {
+snapshot_bytes :: proc(snap: Snapshot, id: Term_ID) -> []byte {
 	assert(snap.idx != nil, "snapshot_bytes: a released snapshot")
-	assert(id != 0 && id&RES_INLINE_FLAG == 0 && id <= snap.idx.n_terms, "snapshot_bytes: not a dictionary id of this snapshot")
+	assert(id != 0 && id&RES_INLINE_FLAG == 0 && u32(id) <= snap.idx.n_terms, "snapshot_bytes: not a dictionary id of this snapshot")
 	return set_bytes(snap.idx, id)
 }
 
@@ -295,7 +295,7 @@ snapshot_bytes :: proc(snap: Snapshot, id: u32) -> []byte {
 // for id 0, an id past the snapshot, or bytes the codec refuses.
 snapshot_term :: proc(
 	snap: Snapshot,
-	id: u32,
+	id: Term_ID,
 	buf: []byte,
 	allocator := context.allocator,
 ) -> (
@@ -306,7 +306,7 @@ snapshot_term :: proc(
 	if id & RES_INLINE_FLAG != 0 {
 		return inline_term(res_inline_disk(id), buf)
 	}
-	if id == 0 || id > snap.idx.n_terms {
+	if id == 0 || u32(id) > snap.idx.n_terms {
 		return nil, false
 	}
 	snap := snap
@@ -339,7 +339,7 @@ choose_order :: proc(p: Pattern) -> (o: Order, k: int) {
 }
 
 @(private = "file")
-pattern_component :: proc(p: Pattern, c: Component) -> u32 {
+pattern_component :: proc(p: Pattern, c: Component) -> Term_ID {
 	switch c {
 	case .S:
 		return p.s
@@ -357,7 +357,7 @@ pattern_component :: proc(p: Pattern, c: Component) -> u32 {
 // prefix window: the first index whose fact compares >= the wanted
 // prefix (upper false), or > it (upper true).
 @(private = "file")
-prefix_bound :: proc(set: ^Index_Set, ids: []u32, key: [4]Component, want: [3]u32, k: int, upper: bool) -> int {
+prefix_bound :: proc(set: ^Index_Set, ids: []Fact_ID, key: [4]Component, want: [3]Term_ID, k: int, upper: bool) -> int {
 	lo, hi := 0, len(ids)
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)
@@ -384,7 +384,7 @@ prefix_bound :: proc(set: ^Index_Set, ids: []u32, key: [4]Component, want: [3]u3
 // res_inline_disk re-tags a resident inlined id back to the on-disk
 // encoding — resident_id's inverse, for handing to the codec.
 @(private)
-res_inline_disk :: proc(id: u32) -> u64 {
+res_inline_disk :: proc(id: Term_ID) -> u64 {
 	assert(id & RES_INLINE_FLAG != 0, "res_inline_disk: not an inlined id")
 	tag := u64(id >> RES_INLINE_TAG_SHIFT) & 0x7
 	payload := u64(id & RES_INLINE_PAYLOAD_MASK)
@@ -415,7 +415,7 @@ resolve_snap_iri :: proc(data: rawptr, id: u64) -> (iri: string, ok: bool) {
 	if id == 0 || id&INLINE_FLAG != 0 || id > u64(snap.idx.n_terms) {
 		return "", false
 	}
-	enc := set_bytes(snap.idx, u32(id))
+	enc := set_bytes(snap.idx, Term_ID(id))
 	if len(enc) == 0 || enc[0] != TERM_TAG_IRI {
 		return "", false
 	}

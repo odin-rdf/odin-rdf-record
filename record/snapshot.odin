@@ -78,15 +78,15 @@ Snapshot_Error :: enum {
 // n_facts and n_terms, and reads them through its own copies of the
 // chunk lists, taken at publication (package comment).
 Index_Set :: struct {
-	ord:     [Order][]u32, // the six sorted FactID permutations
-	terms:   []u32, // the term index: dictionary ids sorted by encoding (termindex.odin)
+	ord:     [Order][]Fact_ID, // the six sorted FactID permutations
+	terms:   []Term_ID, // the term index: dictionary ids sorted by encoding (termindex.odin)
 	derived: []u64, // the origin bitset at publication
 	facts:   [][]Fact, // the fact chunk list at publication
 	dict:    [][]byte, // the dictionary chunk list at publication
 	used:    []u32, // each dictionary chunk's fill at publication
 	off:     []u32, // the dictionary offsets at publication, one per term
 	epochs:  [][]Epoch_Meta, // the epoch chunk list at publication
-	epoch:   u32, // the epoch this set published
+	epoch:   Epoch, // the epoch this set published
 	n_facts: u32, // facts this set covers; ids at or past this are not in ord
 	n_terms: u32, // dictionary high-water mark at publication (api.md par. 13.8); len(terms) and len(off)
 	refs:    int, // atomic reference count: the store's publish reference plus one per live Snapshot
@@ -99,7 +99,7 @@ Index_Set :: struct {
 // pins its whole index set, so the expected discipline is
 // request-scoped, nothing held across think-time (api.md par. 13.2).
 Snapshot :: struct {
-	epoch: u32,
+	epoch: Epoch,
 	idx:   ^Index_Set,
 	store: ^Store,
 }
@@ -142,7 +142,7 @@ build_index_set :: proc(s: ^Store) -> ^Index_Set {
 	set.used = slice.clone(s.dict.used[:], s.allocator)
 	set.off = slice.clone(s.dict.off[:], s.allocator)
 	set.epochs = slice.clone(s.epochs[:], s.allocator)
-	set.epoch = s.n_epochs
+	set.epoch = Epoch(s.n_epochs)
 	set.n_facts = s.n_facts
 	set.n_terms = u32(len(s.dict.off))
 	set.refs = 1 // the store's own reference
@@ -176,7 +176,7 @@ store_latest :: proc(s: ^Store) -> (snap: Snapshot, err: Snapshot_Error) {
 // readable at zero retention cost because nothing is ever removed —
 // the facts of epoch e sit in every later set with their intervals
 // intact — and the future is refused, not clamped.
-store_at :: proc(s: ^Store, epoch: u32) -> (snap: Snapshot, err: Snapshot_Error) {
+store_at :: proc(s: ^Store, epoch: Epoch) -> (snap: Snapshot, err: Snapshot_Error) {
 	return acquire(s, epoch, false)
 }
 
@@ -185,7 +185,7 @@ store_at :: proc(s: ^Store, epoch: u32) -> (snap: Snapshot, err: Snapshot_Error)
 // count is raised before the lock is dropped, so no publish can free
 // the set in between.
 @(private = "file")
-acquire :: proc(s: ^Store, epoch: u32, latest: bool) -> (snap: Snapshot, err: Snapshot_Error) {
+acquire :: proc(s: ^Store, epoch: Epoch, latest: bool) -> (snap: Snapshot, err: Snapshot_Error) {
 	sync.mutex_lock(&s.mu)
 	defer sync.mutex_unlock(&s.mu)
 	set := s.idx
@@ -215,9 +215,9 @@ snapshot_release :: proc(snap: ^Snapshot) {
 // snapshot_fact returns fact `id` through the set's chunk list — the
 // reader's accessor, valid for any id below the set's n_facts. The
 // pointer stays valid for the life of the store.
-snapshot_fact :: proc(snap: Snapshot, id: u32) -> ^Fact {
+snapshot_fact :: proc(snap: Snapshot, id: Fact_ID) -> ^Fact {
 	assert(snap.idx != nil, "snapshot_fact: a released snapshot")
-	assert(id < snap.idx.n_facts, "snapshot_fact: a fact id past the set")
+	assert(u32(id) < snap.idx.n_facts, "snapshot_fact: a fact id past the set")
 	return fact_in(snap.idx.facts, id)
 }
 
@@ -227,9 +227,9 @@ snapshot_fact :: proc(snap: Snapshot, id: u32) -> ^Fact {
 // not visible by construction — they were applied after this set
 // published, and their assert epochs are ones this snapshot rejects
 // anyway; the bound is what lets enumeration stop at the set.
-snapshot_visible :: proc(snap: Snapshot, id: u32) -> bool {
+snapshot_visible :: proc(snap: Snapshot, id: Fact_ID) -> bool {
 	assert(snap.idx != nil, "snapshot_visible: a released snapshot")
-	if id >= snap.idx.n_facts {
+	if u32(id) >= snap.idx.n_facts {
 		return false
 	}
 	f := fact_in(snap.idx.facts, id)
@@ -240,9 +240,9 @@ snapshot_visible :: proc(snap: Snapshot, id: u32) -> bool {
 // snapshot_derived reports a visible-or-not fact's origin from the
 // set's own bitset copy, so the answer is of the publication, not of
 // whatever the writer has appended since.
-snapshot_derived :: proc(snap: Snapshot, id: u32) -> bool {
+snapshot_derived :: proc(snap: Snapshot, id: Fact_ID) -> bool {
 	assert(snap.idx != nil, "snapshot_derived: a released snapshot")
-	assert(id < snap.idx.n_facts, "snapshot_derived: a fact id past the set")
+	assert(u32(id) < snap.idx.n_facts, "snapshot_derived: a fact id past the set")
 	return snap.idx.derived[id >> 6] & (u64(1) << (id & 63)) != 0
 }
 
@@ -250,7 +250,7 @@ snapshot_derived :: proc(snap: Snapshot, id: u32) -> bool {
 // epoch (api.md par. 2.4) through the set's epoch chunk list — the
 // reader's form of store_epoch_meta, for any epoch the set has
 // published.
-snapshot_epoch_meta :: proc(snap: Snapshot, epoch: u32) -> Epoch_Meta {
+snapshot_epoch_meta :: proc(snap: Snapshot, epoch: Epoch) -> Epoch_Meta {
 	assert(snap.idx != nil, "snapshot_epoch_meta: a released snapshot")
 	assert(epoch >= 1 && epoch <= snap.idx.epoch, "snapshot_epoch_meta: an epoch this set has not published")
 	i := epoch - 1
@@ -268,7 +268,7 @@ snapshot_terms :: proc(snap: Snapshot) -> u32 {
 // set_bytes is dict_bytes over a set's copies — the reader's arena
 // view, bounded by the set's n_terms.
 @(private)
-set_bytes :: proc(set: ^Index_Set, id: u32) -> []byte {
+set_bytes :: proc(set: ^Index_Set, id: Term_ID) -> []byte {
 	return dict_bytes_in(set.dict, set.used, set.off, set.n_terms, id)
 }
 

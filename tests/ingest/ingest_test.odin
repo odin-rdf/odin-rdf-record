@@ -29,7 +29,7 @@ open_mem :: proc(t: ^testing.T, s: ^rec.Store, fs: ^rec.Mem_FS, loc := #caller_l
 }
 
 @(private)
-live_count :: proc(s: ^rec.Store, epoch: u32) -> (n: int) {
+live_count :: proc(s: ^rec.Store, epoch: rec.Epoch) -> (n: int) {
 	snap, err := rec.store_at(s, epoch)
 	if err != .None {
 		return -1
@@ -43,7 +43,7 @@ live_count :: proc(s: ^rec.Store, epoch: u32) -> (n: int) {
 }
 
 @(private)
-exists :: proc(s: ^rec.Store, epoch: u32, q: rdf.Quad) -> bool {
+exists :: proc(s: ^rec.Store, epoch: rec.Epoch, q: rdf.Quad) -> bool {
 	snap, err := rec.store_at(s, epoch)
 	if err != .None {
 		return false
@@ -485,10 +485,10 @@ _:g2 { ex:carol ex:knows ex:alice . }
 	testing.expect_value(t, b.n_facts, a2.n_facts)
 	testing.expect_value(t, len(b.dict.off), len(a2.dict.off))
 	for id in 0 ..< min(a2.n_facts, b.n_facts) {
-		testing.expect_value(t, rec.store_fact(&b, id)^, rec.store_fact(&a2, id)^)
+		testing.expect_value(t, rec.store_fact(&b, rec.Fact_ID(id))^, rec.store_fact(&a2, rec.Fact_ID(id))^)
 	}
 	for id in 1 ..= u32(min(len(a2.dict.off), len(b.dict.off))) {
-		testing.expect(t, string(rec.dict_bytes(&b.dict, id)) == string(rec.dict_bytes(&a2.dict, id)), "term bytes agree")
+		testing.expect(t, string(rec.dict_bytes(&b.dict, rec.Term_ID(id))) == string(rec.dict_bytes(&a2.dict, rec.Term_ID(id))), "term bytes agree")
 	}
 	for op in ops {
 		testing.expect(t, exists(&b, 1, op.quad), "every ingested statement is live in the round-tripped store")

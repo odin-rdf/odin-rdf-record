@@ -60,7 +60,7 @@ order_key :: proc(o: Order) -> [4]Component {
 }
 
 // fact_component reads one position of a fact.
-fact_component :: proc(f: ^Fact, c: Component) -> u32 {
+fact_component :: proc(f: ^Fact, c: Component) -> Term_ID {
 	switch c {
 	case .S:
 		return f.s
@@ -91,7 +91,7 @@ fact_component :: proc(f: ^Fact, c: Component) -> u32 {
 // whose elements all share one digit is the identity and is skipped
 // without moving anything.
 @(private = "file")
-radix_pass :: proc(src, dst: []u32, col: []u32, counts: []u32, shift: uint) -> bool {
+radix_pass :: proc(src, dst: []Fact_ID, col: []u32, counts: []u32, shift: uint) -> bool {
 	if len(src) == 0 {
 		return false
 	}
@@ -149,15 +149,15 @@ store_build_permutations :: proc(s: ^Store) {
 		delete(cols[c], s.allocator)
 	}
 	for i in 0 ..< n {
-		f := store_fact(s, u32(i))
+		f := store_fact(s, Fact_ID(i))
 		for c in Component {
-			v := fact_component(f, c)
+			v := u32(fact_component(f, c))
 			cols[c][i] = v
 			maxs[c] = max(maxs[c], v)
 		}
 	}
-	buf_a := make([]u32, n, s.allocator)
-	buf_b := make([]u32, n, s.allocator)
+	buf_a := make([]Fact_ID, n, s.allocator)
+	buf_b := make([]Fact_ID, n, s.allocator)
 	counts := make([]u32, 1 << 16, s.allocator)
 	defer {
 		delete(buf_a, s.allocator)
@@ -168,7 +168,7 @@ store_build_permutations :: proc(s: ^Store) {
 	for o in Order {
 		key := order_key(o)
 		for i in 0 ..< n {
-			buf_a[i] = u32(i)
+			buf_a[i] = Fact_ID(i)
 		}
 		cur, alt := buf_a, buf_b
 		for ki := 3; ki >= 0; ki -= 1 {
@@ -182,7 +182,7 @@ store_build_permutations :: proc(s: ^Store) {
 				}
 			}
 		}
-		ids := make([]u32, n, s.allocator)
+		ids := make([]Fact_ID, n, s.allocator)
 		copy(ids, cur)
 		delete(s.ord[o], s.allocator)
 		s.ord[o] = ids

@@ -535,7 +535,7 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 	for cs, i in changesets {
 		e, _, aerr := rec.apply(&s, {ops = cs, actor = alice, reason = rdf.Literal{lexical = "proof", datatype = rdf.XSD_STRING}})
 		testing.expect_value(t, aerr, rec.Apply_Error{})
-		testing.expect_value(t, e, u32(i+1))
+		testing.expect_value(t, e, rec.Epoch(i+1))
 	}
 	testing.expect(t, s.writer.seg_no >= 2, "the log rotated under apply")
 	head := s.writer.head

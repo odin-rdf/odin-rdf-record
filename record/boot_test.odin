@@ -70,7 +70,7 @@ test_boot_fresh_and_note :: proc(t: ^testing.T) {
 	testing.expect_value(t, lerr, Load_Error.None)
 	testing.expect_value(t, werr, Writer_Error.None)
 	testing.expect_value(t, tear.kind, Tear_Kind.None)
-	testing.expect_value(t, s.published, u32(0))
+	testing.expect_value(t, s.published, Epoch(0))
 	testing.expect_value(t, len(s.notes), 1)
 	p0, ok0 := store_note_at(&s, 0)
 	testing.expect(t, ok0, "the note is in effect from epoch 0")
@@ -88,7 +88,7 @@ test_boot_fresh_and_note :: proc(t: ^testing.T) {
 	_, err2, _, werr2 := store_open(&s2, "store", ofs_ops(&fs))
 	testing.expect_value(t, err2, Open_Error.None)
 	testing.expect_value(t, werr2, Writer_Error.None)
-	testing.expect_value(t, s2.published, u32(1))
+	testing.expect_value(t, s2.published, Epoch(1))
 	testing.expect_value(t, len(s2.notes), 1)
 	ops2 := [1]Fact_Op{{op = .Assert, s = 1, p = 1, o = 1, g = 1}}
 	testing.expect_value(t, writer_commit(&s2.writer, {epoch = 2, wall = OWALL + 1, ops = ops2[:]}), Writer_Error.None)
@@ -171,7 +171,7 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		testing.expect_value(t, err, Open_Error.None)
 		testing.expect_value(t, werr, Writer_Error.None)
 		testing.expect_value(t, tear.kind, Tear_Kind.None)
-		testing.expect_value(t, s.published, u32(2))
+		testing.expect_value(t, s.published, Epoch(2))
 		testing.expect_value(t, s.writer.seg_no, u32(3))
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
 		testing.expect_value(t, writer_commit(&s.writer, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
@@ -194,7 +194,7 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		testing.expect_value(t, err, Open_Error.None)
 		testing.expect_value(t, werr, Writer_Error.None)
 		testing.expect_value(t, tear.kind, Tear_Kind.None)
-		testing.expect_value(t, s.published, u32(2))
+		testing.expect_value(t, s.published, Epoch(2))
 		testing.expect_value(t, s.writer.seg_no, u32(3))
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
 		testing.expect_value(t, writer_commit(&s.writer, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
@@ -220,7 +220,7 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		testing.expect_value(t, tear.kind, Tear_Kind.Tail)
 		testing.expect_value(t, tear.segment, u32(3))
 		testing.expect_value(t, fs.truncates, 1)
-		testing.expect_value(t, s.published, u32(3)) // epoch 4 was cut
+		testing.expect_value(t, s.published, Epoch(3)) // epoch 4 was cut
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
 		testing.expect_value(t, writer_commit(&s.writer, {epoch = 4, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
 		r, _, verr := verify("store", ofs_ops(&fs))
@@ -242,7 +242,7 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		testing.expect_value(t, werr, Writer_Error.None)
 		testing.expect_value(t, tear.kind, Tear_Kind.Header)
 		testing.expect_value(t, fs.removes, 1)
-		testing.expect_value(t, s.published, u32(2))
+		testing.expect_value(t, s.published, Epoch(2))
 		testing.expect_value(t, s.writer.seg_no, u32(3))
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
 		testing.expect_value(t, writer_commit(&s.writer, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)

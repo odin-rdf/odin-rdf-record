@@ -213,7 +213,7 @@ test_intern :: proc(t: ^testing.T) {
 	intern_init(&it, snap)
 	defer intern_destroy(&it)
 
-	expect_id :: proc(t: ^testing.T, it: ^Intern, term: rdf.Term, want: u32, loc := #caller_location) {
+	expect_id :: proc(t: ^testing.T, it: ^Intern, term: rdf.Term, want: Term_ID, loc := #caller_location) {
 		id, err := intern_term(it, term)
 		testing.expect_value(t, err, Term_Error.None, loc = loc)
 		testing.expect_value(t, id, want, loc = loc)
@@ -318,8 +318,8 @@ test_intern_numbering_is_the_logs :: proc(t: ^testing.T) {
 		rdf.Literal{lexical = "2024-02-29", datatype = XSD_DATE},
 		rdf.Literal{lexical = "007", datatype = rdf.XSD_INTEGER},
 	}
-	ids: [len(terms)]u32
-	g: u32
+	ids: [len(terms)]Term_ID
+	g: Term_ID
 	{
 		it: Intern
 		intern_init(&it, snap0)

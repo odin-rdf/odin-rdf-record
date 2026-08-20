@@ -34,7 +34,7 @@ at_open :: proc(t: ^testing.T, s: ^Store, ops: File_Ops, target := SEGMENT_TARGE
 }
 
 @(private = "file")
-at_ok :: proc(t: ^testing.T, s: ^Store, ops: []Op, loc := #caller_location) -> u32 {
+at_ok :: proc(t: ^testing.T, s: ^Store, ops: []Op, loc := #caller_location) -> Epoch {
 	e, conforms, err := apply(s, {ops = ops})
 	testing.expect_value(t, err, Apply_Error{}, loc = loc)
 	testing.expect(t, conforms, "no validator: everything conforms", loc = loc)
@@ -42,7 +42,7 @@ at_ok :: proc(t: ^testing.T, s: ^Store, ops: []Op, loc := #caller_location) -> u
 }
 
 @(private = "file")
-at_exists :: proc(s: ^Store, epoch: u32, q: Op) -> bool {
+at_exists :: proc(s: ^Store, epoch: Epoch, q: Op) -> bool {
 	snap, err := store_at(s, epoch)
 	if err != .None {
 		return false
@@ -85,20 +85,20 @@ same_projection :: proc(t: ^testing.T, a, b: ^Store, walls := true, loc := #call
 	testing.expect_value(t, len(a.facts), len(b.facts), loc = loc)
 	testing.expect_value(t, len(a.derived), len(b.derived), loc = loc)
 	for id in 0 ..< min(a.n_facts, b.n_facts) {
-		testing.expect_value(t, store_fact(a, id)^, store_fact(b, id)^, loc = loc)
-		testing.expect_value(t, store_derived(a, id), store_derived(b, id), loc = loc)
+		testing.expect_value(t, store_fact(a, Fact_ID(id))^, store_fact(b, Fact_ID(id))^, loc = loc)
+		testing.expect_value(t, store_derived(a, Fact_ID(id)), store_derived(b, Fact_ID(id)), loc = loc)
 	}
 	testing.expect_value(t, len(a.dict.off), len(b.dict.off), loc = loc)
 	testing.expect_value(t, len(a.dict.chunks), len(b.dict.chunks), loc = loc)
 	testing.expect(t, slice.equal(a.dict.used[:], b.dict.used[:]), "arena fills agree", loc = loc)
 	testing.expect(t, slice.equal(a.dict.off[:], b.dict.off[:]), "arena offsets agree", loc = loc)
 	for id in 1 ..= u32(min(len(a.dict.off), len(b.dict.off))) {
-		testing.expect(t, string(dict_bytes(&a.dict, id)) == string(dict_bytes(&b.dict, id)), "term bytes agree", loc = loc)
+		testing.expect(t, string(dict_bytes(&a.dict, Term_ID(id))) == string(dict_bytes(&b.dict, Term_ID(id))), "term bytes agree", loc = loc)
 	}
 	testing.expect_value(t, a.n_epochs, b.n_epochs, loc = loc)
 	testing.expect_value(t, len(a.epochs), len(b.epochs), loc = loc)
 	for e in 1 ..= min(a.n_epochs, b.n_epochs) {
-		ma, mb := store_epoch_meta(a, e), store_epoch_meta(b, e)
+		ma, mb := store_epoch_meta(a, Epoch(e)), store_epoch_meta(b, Epoch(e))
 		if !walls {
 			ma.wall, mb.wall = 0, 0
 		}
@@ -155,27 +155,27 @@ test_apply_taxonomy :: proc(t: ^testing.T) {
 	// interval [E, E), visible at no epoch.
 	flicker := [3]Op{A, op(.Retract, alice, knows, bob), B}
 	e1 := at_ok(t, &s, flicker[:])
-	testing.expect_value(t, e1, u32(1))
+	testing.expect_value(t, e1, Epoch(1))
 	testing.expect_value(t, s.n_facts, u32(2))
-	testing.expect_value(t, store_fact(&s, 0).assert, u32(1))
-	testing.expect_value(t, store_fact(&s, 0).retract, u32(1))
+	testing.expect_value(t, store_fact(&s, 0).assert, Epoch(1))
+	testing.expect_value(t, store_fact(&s, 0).retract, Epoch(1))
 	testing.expect(t, !at_exists(&s, 1, A), "the flickered quad is not visible at its own epoch")
 	testing.expect(t, at_exists(&s, 1, B), "the other assert is")
 
 	// Head preconditions, and retract then re-assert as a new generation.
 	e2 := at_ok(t, &s, one[:])
-	testing.expect_value(t, e2, u32(2))
+	testing.expect_value(t, e2, Epoch(2))
 	_, _, herr := apply(&s, {ops = one[:]})
 	testing.expect_value(t, herr, Apply_Error{.Already_Live, 0})
 	again := [2]Op{op(.Retract, alice, knows, bob), A}
 	e3 := at_ok(t, &s, again[:])
-	testing.expect_value(t, e3, u32(3))
+	testing.expect_value(t, e3, Epoch(3))
 	testing.expect_value(t, s.n_facts, u32(4))
-	testing.expect_value(t, store_fact(&s, 2).retract, u32(3))
-	testing.expect_value(t, store_fact(&s, 3).assert, u32(3))
+	testing.expect_value(t, store_fact(&s, 2).retract, Epoch(3))
+	testing.expect_value(t, store_fact(&s, 3).assert, Epoch(3))
 	testing.expect(t, at_exists(&s, 2, A) && at_exists(&s, 3, A), "live before and after the generation change")
 	e4 := at_ok(t, &s, gone[:])
-	testing.expect_value(t, e4, u32(4))
+	testing.expect_value(t, e4, Epoch(4))
 	testing.expect(t, !at_exists(&s, 4, A) && at_exists(&s, 3, A), "retracted at 4, still live at 3")
 	_, _, n2 := apply(&s, {ops = gone[:]})
 	testing.expect_value(t, n2, Apply_Error{.Not_Live, 0})
@@ -193,7 +193,7 @@ test_apply_taxonomy :: proc(t: ^testing.T) {
 	}
 	e5, _, serr := apply(&s, {ops = shapes[:], actor = alice, reason = rdf.Literal{lexical = "because", datatype = rdf.XSD_STRING}})
 	testing.expect_value(t, serr, Apply_Error{})
-	testing.expect_value(t, e5, u32(5))
+	testing.expect_value(t, e5, Epoch(5))
 	for sh in shapes {
 		testing.expect(t, at_exists(&s, 5, sh), "every shape is live at its epoch")
 		testing.expect(t, !at_exists(&s, 4, sh), "and not before it")
@@ -206,7 +206,7 @@ test_apply_taxonomy :: proc(t: ^testing.T) {
 	testing.expect(t, aok && actor_term == alice, "the actor is the term given")
 	reason_term, rok := snapshot_term(snap, meta.reason, buf[:])
 	testing.expect(t, rok && reason_term == rdf.Term(rdf.Literal{lexical = "because", datatype = rdf.XSD_STRING}), "the reason is the term given")
-	testing.expect_value(t, snapshot_epoch_meta(snap, 4).actor, u32(0))
+	testing.expect_value(t, snapshot_epoch_meta(snap, 4).actor, Term_ID(0))
 	testing.expect(t, meta.wall > 1_700_000_000_000_000_000, "the wall clock is the writer's, in Unix ns")
 	testing.expect(t, snapshot_terms(snap) >= 10, "terms were interned")
 
@@ -225,14 +225,14 @@ test_apply_epoch_exhausted :: proc(t: ^testing.T) {
 	s: Store
 	store_init(&s)
 	defer store_destroy(&s)
-	s.n_epochs = LIVE_EPOCH - 1
+	s.n_epochs = u32(LIVE_EPOCH) - 1
 	store_build_permutations(&s)
 	store_build_term_index(&s)
 	store_publish(&s)
 	one := [1]Op{op(.Assert, iri("http://ex/a"), iri("http://ex/p"), iri("http://ex/b"))}
 	_, _, err := apply(&s, {ops = one[:]})
 	testing.expect_value(t, err, Apply_Error{.Epoch_Exhausted, -1})
-	testing.expect_value(t, s.n_epochs, LIVE_EPOCH-1)
+	testing.expect_value(t, s.n_epochs, u32(LIVE_EPOCH)-1)
 	testing.expect_value(t, len(s.dict.off), 0)
 }
 
@@ -306,7 +306,7 @@ test_apply_rollback_exact :: proc(t: ^testing.T) {
 	a2: Store
 	at_open(t, &a2, ofs_ops(&durable))
 	defer store_close(&a2)
-	testing.expect_value(t, a2.published, u32(3))
+	testing.expect_value(t, a2.published, Epoch(3))
 	same_projection(t, &a, &a2)
 }
 
@@ -481,7 +481,7 @@ equivalence :: proc(t: ^testing.T, ops: File_Ops, seed: u64) {
 	s1: Store
 	at_open(t, &s1, ops)
 	defer store_close(&s1)
-	testing.expect_value(t, s1.published, u32(60))
+	testing.expect_value(t, s1.published, Epoch(60))
 	same_projection(t, &s, &s1)
 	testing.expect_value(t, store_close(&s), Writer_Error.None)
 }
@@ -507,7 +507,7 @@ test_apply_replay_equivalence_mem :: proc(t: ^testing.T) {
 // fires on its own — under a budget that fails operation k+1. Returns
 // the epochs apply acknowledged before the cut.
 @(private = "file")
-sweep_apply :: proc(fs: ^OFS) -> (acked: [dynamic]u32) {
+sweep_apply :: proc(fs: ^OFS) -> (acked: [dynamic]Epoch) {
 	s: Store
 	_, err, lerr, werr := store_open(&s, "store", ofs_ops(fs), target_size = 300)
 	if err != .None || lerr != .None || werr != .None {
@@ -563,7 +563,7 @@ test_apply_crash_sweep :: proc(t: ^testing.T) {
 			s: Store
 			_, err, lerr, werr := store_open(&s, "store", ofs_ops(&durable), target_size = 300)
 			testing.expectf(t, err == .None && lerr == .None && werr == .None, "cut %d half %v: boot %v %v %v", cut, half, err, lerr, werr)
-			last := u32(0)
+			last := Epoch(0)
 			if len(acked) > 0 {
 				last = acked[len(acked)-1]
 			}
@@ -579,8 +579,8 @@ test_apply_crash_sweep :: proc(t: ^testing.T) {
 			col: Sweep_Count
 			r, _, verr := replay("store", ofs_ops(&durable), sweep_consumer(&col))
 			testing.expectf(t, verr == .None, "cut %d half %v: combined log replay %v", cut, half, verr)
-			testing.expect_value(t, u32(r.last_epoch), resumed)
-			testing.expect_value(t, col.commits, resumed)
+			testing.expect_value(t, Epoch(r.last_epoch), resumed)
+			testing.expect_value(t, col.commits, u32(resumed))
 		}
 	}
 }
@@ -612,7 +612,7 @@ sweep_consumer :: proc(c: ^Sweep_Count) -> Consumer {
 Probe :: struct {
 	verdict:          bool,
 	calls:            int,
-	epoch:            u32,
+	epoch:            Epoch,
 	n_ops:            int,
 	kinds:            [8]Op_Kind,
 	cand_asserted:    bool, // the asserted quad exists in the candidate
@@ -686,9 +686,9 @@ test_apply_validator_sees_the_candidate :: proc(t: ^testing.T) {
 	pr.retracted = op(.Retract, alice, knows, carol) // nothing to retract yet: absent in both views
 	pr.new_term = bob
 	e1 := at_ok(t, &s, first[:])
-	testing.expect_value(t, e1, u32(1))
+	testing.expect_value(t, e1, Epoch(1))
 	testing.expect_value(t, pr.calls, 1)
-	testing.expect_value(t, pr.epoch, u32(1))
+	testing.expect_value(t, pr.epoch, Epoch(1))
 	testing.expect_value(t, pr.n_ops, 1)
 	testing.expect_value(t, pr.kinds[0], Op_Kind.Assert)
 	testing.expect(t, pr.cand_asserted && !pr.head_asserted, "the candidate shows the assert; the head does not")
@@ -706,9 +706,9 @@ test_apply_validator_sees_the_candidate :: proc(t: ^testing.T) {
 	pr.retracted = second[0]
 	pr.new_term = carol
 	e2 := at_ok(t, &s, second[:])
-	testing.expect_value(t, e2, u32(2))
+	testing.expect_value(t, e2, Epoch(2))
 	testing.expect_value(t, pr.calls, 2)
-	testing.expect_value(t, pr.epoch, u32(2))
+	testing.expect_value(t, pr.epoch, Epoch(2))
 	testing.expect_value(t, pr.n_ops, 2)
 	testing.expect(t, pr.kinds[0] == .Retract && pr.kinds[1] == .Assert, "the ops arrive in order with their kinds")
 	testing.expect(t, pr.cand_asserted && !pr.cand_retracted, "the candidate is the post-state")
@@ -776,11 +776,11 @@ test_apply_validator_modes :: proc(t: ^testing.T) {
 	b_e, b_conf, b_err := apply(&b, {ops = cs[:], mode = .Record})
 	testing.expect_value(t, b_err, Apply_Error{})
 	testing.expect(t, !b_conf, "Record: the epoch commits and the verdict is reported")
-	testing.expect_value(t, b_e, u32(2))
+	testing.expect_value(t, b_e, Epoch(2))
 	c_e, c_conf, c_err := apply(&c, {ops = cs[:], mode = .Enforce})
 	testing.expect_value(t, c_err, Apply_Error{})
 	testing.expect(t, c_conf, "Enforce with a conforming changeset commits")
-	testing.expect_value(t, c_e, u32(2))
+	testing.expect_value(t, c_e, Epoch(2))
 	same_projection(t, &b, &c, walls = false)
 
 	// Decision 5: the two logs' epoch-2 commits differ only by their

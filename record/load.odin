@@ -52,8 +52,8 @@ Load_Error :: enum {
 // Loader — the store keeps no map from encoding to id (decision 2).
 Loader :: struct {
 	store: ^Store,
-	live:  map[Quad]u32,
-	seen:  map[string]u32,
+	live:  map[Quad]Fact_ID,
+	seen:  map[string]Term_ID,
 	err:   Load_Error,
 	epoch: u64,     // the epoch being applied when err was set
 	op:    Fact_Op, // the offending op, zero-valued for non-op refusals
@@ -65,8 +65,8 @@ Loader :: struct {
 // Loader's own and uses the store's allocator.
 loader_init :: proc(ld: ^Loader, s: ^Store) {
 	ld.store = s
-	ld.live = make(map[Quad]u32, s.allocator)
-	ld.seen = make(map[string]u32, s.allocator)
+	ld.live = make(map[Quad]Fact_ID, s.allocator)
+	ld.seen = make(map[string]Term_ID, s.allocator)
 }
 
 // loader_destroy drops the transient scaffolding. The store it built
@@ -141,7 +141,7 @@ load_op :: proc(data: rawptr, epoch: u64, op: Fact_Op) -> bool {
 		}
 		id := fact_append(
 			ld.store,
-			Fact{s = q.s, p = q.p, o = q.o, g = q.g, assert = u32(epoch), retract = LIVE_EPOCH},
+			Fact{s = q.s, p = q.p, o = q.o, g = q.g, assert = Epoch(epoch), retract = LIVE_EPOCH},
 			op.op == .Assert_Derived,
 		)
 		ld.live[q] = id
@@ -154,7 +154,7 @@ load_op :: proc(data: rawptr, epoch: u64, op: Fact_Op) -> bool {
 			ld.op = op
 			return load_fail(ld, .Retract_Not_Live)
 		}
-		store_fact(ld.store, id).retract = u32(epoch)
+		store_fact(ld.store, id).retract = Epoch(epoch)
 		delete_key(&ld.live, q)
 	}
 	return true
@@ -168,6 +168,6 @@ load_note :: proc(data: rawptr, last_epoch: u64, payload: []byte) -> bool {
 	// which load_commit has already bounded below LIVE_EPOCH.
 	cloned := make([]byte, len(payload), s.allocator)
 	copy(cloned, payload)
-	append(&s.notes, Env_Note{last_epoch = u32(last_epoch), payload = cloned})
+	append(&s.notes, Env_Note{last_epoch = Epoch(last_epoch), payload = cloned})
 	return true
 }
