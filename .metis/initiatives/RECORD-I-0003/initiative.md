@@ -608,7 +608,9 @@ nearly two hours, and the number wanted is per commit, not per corpus;
 the measurement is 24 commits after the bulk load, each timed.
 
 **What the siblings' CI needs from a published repository (the owner's
-to do; listed here, not done here):**
+to do; listed here, not done here — *published and tagged 2026-08-20:
+`odin-rdf/odin-rdf-record`, `v0.1.0` at `e29764e`; the family CLAUDE.md's
+record section carries the port handoff that goes beyond the list below*):**
 
 - A repository under the organization and a tag to pin — the family
   pins consumers to tags (`odin-rdf-store@v0.6.0`, `odin-rdf-parser@v0.1.0`
@@ -681,7 +683,8 @@ a typed error naming the op, gives a wired validator the post-state
 before any byte is durable, and whose apply-written log verifies under
 both verifiers and replays to the same projection. The odin-rdf-shacl
 port initiative is unblocked on its side, and the odin-rdf-sparql port
-after it; publication and the first tag are the owner's.
+after it; publication and the first tag are the owner's *(done 2026-08-20:
+`v0.1.0`)*.
 
 ## Session handoff — 2026-08-20, before implementation begins
 

@@ -88,7 +88,8 @@ their side, once that API is real.
 > this repository and retire odin-rdf-store, the siblings adapting to this
 > store and not the reverse. Their port initiatives live on their side; what
 > they need from here is listed in RECORD-I-0003's Status. Publication of
-> the repository and its first tag are the owner's.
+> the repository and its first tag are the owner's — *done the same
+> evening: `odin-rdf/odin-rdf-record`, tag `v0.1.0` at `e29764e`.*
 
 ## Future State
 
