@@ -4,14 +4,14 @@ level: initiative
 title: "The resident store: replay-built projection and the snapshot read API"
 short_code: "RECORD-I-0002"
 created_at: 2026-08-19T20:02:06.582341+00:00
-updated_at: 2026-08-19T20:16:59.089059+00:00
+updated_at: 2026-08-20T00:46:31.504348+00:00
 parent: RECORD-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -301,3 +301,79 @@ reason `tests/scale` generates through `Mem_FS` and flushes whole files
 to disk afterwards: F_FULLFSYNC on darwin costs ~5–20 ms per sync, so a
 per-epoch fsync at 2×10⁵ epochs would run for an hour — any test that
 writes many epochs through the real posix ops is a bug in the test.
+
+## Handoff to the Apply initiative — 2026-08-20, what only this session knows
+
+Recorded at completion for whoever drafts the next initiative, in the
+order they will hit them:
+
+**1. The `by_term` map has a reader/writer race the documents never
+address — Apply's one open design question.** api.md §4 says `byTerm`
+"is needed only on the write path", but §12.7's Resolve probes it on
+the read path — and Apply's intern *mutates* it while readers hold
+snapshots. Odin maps are not concurrent-safe; a rehash under a reader's
+probe is a crash. Everything else a reader touches is protected by the
+chunks-never-move invariant plus the n_terms bound; the map is the one
+structure with neither. Options, roughly in order of appeal: an
+immutable published map beside the writer's small pending map (readers
+probe published, then pending under the epoch bound — but pending needs
+its own publication discipline); a reader-side path that avoids the map
+entirely; or a lock, which violates the lock-free read path. This
+deserves a section in the initiative and possibly an ADR — and api.md
+should be amended once decided.
+
+**2. The retire list is Apply's first obligation, not an option.** The
+acquire/free window in `store_at` (a publish between a reader's idx
+load and its refcount increment could free the set) is documented in
+snapshot.odin's package comment and harmless today because boot is the
+only publisher. Apply is the first concurrent publisher: it must defer
+frees — retire a superseded set, free it on a later publish once its
+count drains — rather than release on supersession as store_publish
+does now.
+
+**3. The live-quad check has its answer measured.** api.md §6's
+recommendation stands: do NOT keep the replay map; the duplicate-assert
+and retract-resolution checks are a binary search over the just-rebuilt
+SPO permutation (~19 probes, vs. the map's share of the measured
+50–73 MB boot peak). One subtlety the documents do not state: a
+changeset's ops must also be checked against *each other* — asserting
+then retracting one quad inside a single epoch is legal (the read tests
+craft exactly that) and must resolve within the changeset.
+
+**4. The v1 rebuild cost per commit is now a number.** RECORD-A-0005's
+flat copy-on-write means a full permutation rebuild per commit: the
+radix sort measured 45–57 ms optimized at 340k facts, plus ~16 MB of
+transient allocator traffic per rebuild. Fine at the premise's
+human-paced commit rate; the ADR's review trigger ("measured commit
+latency") now has its baseline, and the delta structure remains the
+recorded answer if it ever binds.
+
+**5. There is no term encoder in the repo — and probe_encode is 90% of
+one.** The writer takes pre-encoded Term_Defs; every encoding in the
+tests is hand-written. Apply's intern needs architecture.md §3.2's
+encodeTerm, and `probe_encode` (read.odin, file-private) already builds
+exactly those bytes for Resolve — promote and share it rather than
+write a second encoder. Caveat recorded in T-0010: Resolve probes the
+full-IRI encoding only, so if intern ever emits split IRIs (tag 0x06),
+the split probe must be added in the same change or joins silently
+break.
+
+**6. Small obligations.** The writer must refuse creating epoch
+LIVE_EPOCH (replay refuses it; Apply should refuse at the source).
+Fact.retract writes must be atomic stores — readers already load it
+atomically, and §2.3's monotonicity argument makes relaxed ordering
+sufficient. Apply's internal order is fixed by store_publish's assert:
+append facts → build permutations → publish. The `"derived":"none"`
+environment-note regime must flip in whatever initiative adds
+derivation — writing a differing note is automatic; deciding the new
+payload is not.
+
+**7. Test scaffolding state.** OFS (fakefs_test.odin) is the one
+full-fidelity fake — operation budget, synced/linked durability
+tracking, `ofs_durable` — use it for Apply's crash tests; Fake_FS
+lingers only for the writer's own sweep and retiring it into OFS is
+standing cleanup. Two rules that cost time when forgotten: never commit
+many epochs through the real posix ops in a test (F_FULLFSYNC is
+5–20 ms per sync on darwin), and never bound a range loop by a writer
+counter the loop body advances — it cost this session a spinning test
+binary before the bounds were hoisted.
