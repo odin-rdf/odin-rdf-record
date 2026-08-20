@@ -584,6 +584,20 @@ Publishing must trail the fsync as well as the apply. Publish between steps 2 an
 3 and a reader can observe an epoch that a crash then unmakes — the one ordering
 error in this sequence that yields a *wrong* answer rather than a lost one.
 
+> **Amended 2026-08-20 (RECORD-I-0003 decision 1, RECORD-T-0015).** The
+> implementation's order is *apply to unpublished state, validate, fsync,
+> publish*: step 4's resident mutation happens before step 3's fsync, in
+> writer-private state no published reader can observe — every reader is
+> bounded by its index set's fact count, term count and epoch, and the epoch
+> being applied is past all three. Read for their purpose the two boundaries
+> are untouched: nothing is durable before the fsync, and nothing is
+> *published* before it, and a writer failure after the mutation rolls the
+> projection back exactly (tested by comparison against a store that never saw
+> the changeset). What the reordering buys is the overlay view of
+> `RECORD-A-0006`: the candidate state, as an ordinary snapshot pinned at E+1,
+> is what the validation hook reads — the real read API over the real
+> post-state, with no second representation of anything.
+
 Rotation: `fsync` the old segment after its seal record, create the new segment,
 write and `fsync` its header, then `fsync` the directory. The directory sync is the
 step people forget, and skipping it means a crash can leave a file that exists in

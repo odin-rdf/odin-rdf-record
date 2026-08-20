@@ -65,7 +65,7 @@ test_boot_fresh_and_note :: proc(t: ^testing.T) {
 	// writer, and the startup note as the first record after the
 	// header — the log is self-describing from birth.
 	s: Store
-	w, tear, err, lerr, werr := store_open(&s, "store", ofs_ops(&fs))
+	tear, err, lerr, werr := store_open(&s, "store", ofs_ops(&fs))
 	testing.expect_value(t, err, Open_Error.None)
 	testing.expect_value(t, lerr, Load_Error.None)
 	testing.expect_value(t, werr, Writer_Error.None)
@@ -78,23 +78,21 @@ test_boot_fresh_and_note :: proc(t: ^testing.T) {
 
 	terms1 := [1]Term_Def{{id = 1, enc = transmute([]byte)string("\x01http://ex/a")}}
 	ops1 := [1]Fact_Op{{op = .Assert, s = 1, p = 1, o = 1, g = 0}}
-	testing.expect_value(t, writer_commit(&w, {epoch = 1, wall = OWALL, terms = terms1[:], ops = ops1[:]}), Writer_Error.None)
-	writer_destroy(&w)
-	store_destroy(&s)
+	testing.expect_value(t, writer_commit(&s.writer, {epoch = 1, wall = OWALL, terms = terms1[:], ops = ops1[:]}), Writer_Error.None)
+	store_close(&s)
 
 	// The second boot resumes: the environment is unchanged, so no
 	// second note — "written at startup when any of it differs"
 	// (log.md par. 7.1), and byte-equality is the differs test.
 	s2: Store
-	w2, _, err2, _, werr2 := store_open(&s2, "store", ofs_ops(&fs))
+	_, err2, _, werr2 := store_open(&s2, "store", ofs_ops(&fs))
 	testing.expect_value(t, err2, Open_Error.None)
 	testing.expect_value(t, werr2, Writer_Error.None)
 	testing.expect_value(t, s2.published, u32(1))
 	testing.expect_value(t, len(s2.notes), 1)
 	ops2 := [1]Fact_Op{{op = .Assert, s = 1, p = 1, o = 1, g = 1}}
-	testing.expect_value(t, writer_commit(&w2, {epoch = 2, wall = OWALL + 1, ops = ops2[:]}), Writer_Error.None)
-	writer_destroy(&w2)
-	store_destroy(&s2)
+	testing.expect_value(t, writer_commit(&s2.writer, {epoch = 2, wall = OWALL + 1, ops = ops2[:]}), Writer_Error.None)
+	store_close(&s2)
 
 	r, _, verr := verify("store", ofs_ops(&fs))
 	testing.expect_value(t, verr, Open_Error.None)
@@ -136,23 +134,21 @@ test_boot_byte_identical :: proc(t: ^testing.T) {
 	fs_b: OFS
 	defer ofs_destroy(&fs_b)
 	sb: Store
-	wb, _, berr, _, bwerr := store_open(&sb, "store", ofs_ops(&fs_b))
+	_, berr, _, bwerr := store_open(&sb, "store", ofs_ops(&fs_b))
 	testing.expect_value(t, berr, Open_Error.None)
 	testing.expect_value(t, bwerr, Writer_Error.None)
 	for e in u64(1) ..= 4 {
-		commit_n(t, &wb, e)
+		commit_n(t, &sb.writer, e)
 	}
-	writer_destroy(&wb)
-	store_destroy(&sb)
+	store_close(&sb)
 	sb2: Store
-	wb2, _, berr2, _, bwerr2 := store_open(&sb2, "store", ofs_ops(&fs_b))
+	_, berr2, _, bwerr2 := store_open(&sb2, "store", ofs_ops(&fs_b))
 	testing.expect_value(t, berr2, Open_Error.None)
 	testing.expect_value(t, bwerr2, Writer_Error.None)
 	for e in u64(5) ..= 6 {
-		commit_n(t, &wb2, e)
+		commit_n(t, &sb2.writer, e)
 	}
-	writer_destroy(&wb2)
-	store_destroy(&sb2)
+	store_close(&sb2)
 
 	fa := ofs_find(&fs_a, "store/000001.rlog")
 	fb := ofs_find(&fs_b, "store/000001.rlog")
@@ -171,20 +167,19 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		_ = obuild(t, &fs)
 		ofs_find(&fs, "store/000003.rlog").gone = true
 		s: Store
-		w, tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
+		tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
 		testing.expect_value(t, err, Open_Error.None)
 		testing.expect_value(t, werr, Writer_Error.None)
 		testing.expect_value(t, tear.kind, Tear_Kind.None)
 		testing.expect_value(t, s.published, u32(2))
-		testing.expect_value(t, w.seg_no, u32(3))
+		testing.expect_value(t, s.writer.seg_no, u32(3))
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
-		testing.expect_value(t, writer_commit(&w, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
+		testing.expect_value(t, writer_commit(&s.writer, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
 		r, _, verr := verify("store", ofs_ops(&fs))
 		testing.expect_value(t, verr, Open_Error.None)
 		testing.expect_value(t, r.segments, u32(3))
 		testing.expect_value(t, r.last_epoch, u64(3))
-		writer_destroy(&w)
-		store_destroy(&s)
+		store_close(&s)
 	}
 	// (b) A header-only tail — rotation crashed right after the new
 	// segment durably opened — resumes by appending into it.
@@ -195,19 +190,18 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		f3 := ofs_find(&fs, "store/000003.rlog")
 		ofs_set(f3, f3.data[:HEADER_SIZE])
 		s: Store
-		w, tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
+		tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
 		testing.expect_value(t, err, Open_Error.None)
 		testing.expect_value(t, werr, Writer_Error.None)
 		testing.expect_value(t, tear.kind, Tear_Kind.None)
 		testing.expect_value(t, s.published, u32(2))
-		testing.expect_value(t, w.seg_no, u32(3))
+		testing.expect_value(t, s.writer.seg_no, u32(3))
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
-		testing.expect_value(t, writer_commit(&w, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
+		testing.expect_value(t, writer_commit(&s.writer, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
 		r, _, verr := verify("store", ofs_ops(&fs))
 		testing.expect_value(t, verr, Open_Error.None)
 		testing.expect_value(t, r.last_epoch, u64(3))
-		writer_destroy(&w)
-		store_destroy(&s)
+		store_close(&s)
 	}
 	// (c) A torn tail recovers — the event surfaced, never swallowed —
 	// and resume appends at the truncation point.
@@ -220,7 +214,7 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		defer delete(offs)
 		ofs_set(f3, f3.data[:offs[1]+5])
 		s: Store
-		w, tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
+		tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
 		testing.expect_value(t, err, Open_Error.None)
 		testing.expect_value(t, werr, Writer_Error.None)
 		testing.expect_value(t, tear.kind, Tear_Kind.Tail)
@@ -228,12 +222,11 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		testing.expect_value(t, fs.truncates, 1)
 		testing.expect_value(t, s.published, u32(3)) // epoch 4 was cut
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
-		testing.expect_value(t, writer_commit(&w, {epoch = 4, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
+		testing.expect_value(t, writer_commit(&s.writer, {epoch = 4, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
 		r, _, verr := verify("store", ofs_ops(&fs))
 		testing.expect_value(t, verr, Open_Error.None)
 		testing.expect_value(t, r.last_epoch, u64(4))
-		writer_destroy(&w)
-		store_destroy(&s)
+		store_close(&s)
 	}
 	// (d) A husk tail — the segment file exists but never durably
 	// opened — is removed, and resume finishes the rotation.
@@ -244,17 +237,16 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		garbage := [40]u8{0 = 'x'}
 		ofs_set(ofs_find(&fs, "store/000003.rlog"), garbage[:])
 		s: Store
-		w, tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
+		tear, err, _, werr := store_open(&s, "store", ofs_ops(&fs))
 		testing.expect_value(t, err, Open_Error.None)
 		testing.expect_value(t, werr, Writer_Error.None)
 		testing.expect_value(t, tear.kind, Tear_Kind.Header)
 		testing.expect_value(t, fs.removes, 1)
 		testing.expect_value(t, s.published, u32(2))
-		testing.expect_value(t, w.seg_no, u32(3))
+		testing.expect_value(t, s.writer.seg_no, u32(3))
 		ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = 1}}
-		testing.expect_value(t, writer_commit(&w, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
-		writer_destroy(&w)
-		store_destroy(&s)
+		testing.expect_value(t, writer_commit(&s.writer, {epoch = 3, wall = OWALL + 9, ops = ops[:]}), Writer_Error.None)
+		store_close(&s)
 	}
 	// (e) A halting verdict passes through untouched: damage in a
 	// sealed segment is evidence, and boot refuses with the walk's own
@@ -268,11 +260,11 @@ test_boot_rotation_edges :: proc(t: ^testing.T) {
 		defer delete(offs)
 		f1.data[offs[0]+FRAME_OVERHEAD+5] ~= 0x01
 		s: Store
-		w, _, err, lerr, werr := store_open(&s, "store", ofs_ops(&fs))
+		_, err, lerr, werr := store_open(&s, "store", ofs_ops(&fs))
 		testing.expect_value(t, err, Open_Error.Corrupt)
 		testing.expect_value(t, lerr, Load_Error.None)
 		testing.expect_value(t, werr, Writer_Error.None)
-		testing.expect(t, w.dir == "", "no writer on a refused boot")
+		testing.expect(t, s.writer.dir == "", "no writer on a refused boot")
 		testing.expect_value(t, fs.truncates, 0)
 	}
 }
@@ -345,7 +337,7 @@ test_boot_cross_restart_sweep :: proc(t: ^testing.T) {
 			// Boot. Every crash state is recoverable, no acknowledged
 			// epoch is lost, and the store continues.
 			s: Store
-			w, _, err, lerr, werr := store_open(&s, "store", ofs_ops(&durable), 200)
+			_, err, lerr, werr := store_open(&s, "store", ofs_ops(&durable), 200)
 			testing.expectf(t, err == .None, "cut %d half %v: boot err %v", cut, half, err)
 			testing.expectf(t, lerr == .None && werr == .None, "cut %d half %v: %v %v", cut, half, lerr, werr)
 			last := u64(0)
@@ -357,17 +349,16 @@ test_boot_cross_restart_sweep :: proc(t: ^testing.T) {
 			// Two more epochs through the resumed writer. The bounds
 			// are hoisted: writer_commit advances prev_epoch, and a
 			// bound read from it inside the range would never be met.
-			first := w.prev_epoch + 1
+			first := s.writer.prev_epoch + 1
 			for e in first ..= first + 1 {
 				enc := fmt.bprintf(enc_buf[:], "\x01http://ex/r%d", e)
-				terms := [1]Term_Def{{id = w.next_term_id, enc = transmute([]byte)enc}}
-				ops := [1]Fact_Op{{op = .Assert, s = w.next_term_id, p = w.next_term_id, o = w.next_term_id, g = 0}}
-				cerr := writer_commit(&w, {epoch = e, wall = OWALL + 100 + e, terms = terms[:], ops = ops[:]})
+				terms := [1]Term_Def{{id = s.writer.next_term_id, enc = transmute([]byte)enc}}
+				ops := [1]Fact_Op{{op = .Assert, s = s.writer.next_term_id, p = s.writer.next_term_id, o = s.writer.next_term_id, g = 0}}
+				cerr := writer_commit(&s.writer, {epoch = e, wall = OWALL + 100 + e, terms = terms[:], ops = ops[:]})
 				testing.expectf(t, cerr == .None, "cut %d half %v: resumed commit %v", cut, half, cerr)
 			}
-			resumed_last := w.prev_epoch
-			writer_destroy(&w)
-			store_destroy(&s)
+			resumed_last := s.writer.prev_epoch
+			store_close(&s)
 
 			// The combined log verifies clean and replays to the union
 			// of both runs.

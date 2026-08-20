@@ -166,6 +166,8 @@ Store :: struct {
 	idx:       ^Index_Set, // the published index set (snapshot.odin); nil until the first publish; swapped under mu
 	published: u32, // the published epoch (log.md par. 7.1 step 5); stored after idx, under mu
 	mu:        sync.Mutex, // taken by acquire (store_latest, store_at) and by publish, and by nothing else (RECORD-I-0003 decision 3)
+	writer:    Writer, // the single writer of the store's directory, resumed by store_open; apply commits through it
+	write_err: Writer_Error, // the writer's last refusal, set by apply beside its .Writer
 	allocator: runtime.Allocator,
 }
 
@@ -183,11 +185,13 @@ store_init :: proc(s: ^Store, allocator := context.allocator) {
 	s.dict.off = make([dynamic]u32, allocator)
 }
 
-// store_destroy frees everything the store owns. Views handed out by
-// dict_bytes and pointers from store_fact die with it. Every snapshot
-// must have been released first — the store's publish reference must
-// be the published set's last, which is RECORD-A-0005's close
-// assertion making a leaked snapshot loud.
+// store_destroy frees everything the projection owns. Views handed out
+// by dict_bytes and pointers from store_fact die with it. Every
+// snapshot must have been released first — the store's publish
+// reference must be the published set's last, which is RECORD-A-0005's
+// close assertion making a leaked snapshot loud. A store opened by
+// store_open is closed with store_close, which releases the writer
+// too; this alone is for a projection built without one.
 store_destroy :: proc(s: ^Store) {
 	if s.idx != nil {
 		assert(s.idx.refs == 1, "store_destroy: a snapshot is still holding the published set")

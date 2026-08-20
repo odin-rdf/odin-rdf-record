@@ -35,7 +35,10 @@
 // termindex.odin is the sorted term index, the read side's one
 // dictionary lookup (RECORD-T-0014); read.odin is the pattern-matching
 // read API — Match, Iter, Resolve, Bytes, Term, Kind, Exists
-// (RECORD-T-0010, RECORD-T-0014); boot.odin is store_open,
+// (RECORD-T-0010, RECORD-T-0014); apply.odin is the one write path —
+// Apply, preconditions, the candidate, rollback, commit, publish
+// (RECORD-T-0015) — and writer_mem.odin the in-memory File_Ops for
+// tests and scratch stores; boot.odin is store_open,
 // the composition of all of it — recover, replay, sort, publish,
 // writer resume, and the startup environment note (RECORD-T-0011);
 // intern.odin is the one term encoder and the writer's per-changeset

@@ -30,10 +30,10 @@ ENV_NOTE_V1 :: `{"format":1,"derived":"none"}`
 // recovery, par. 8's replay as the only load path, the six sorts, one
 // publication, and the writer resumed to continue the chain. A fresh
 // directory (or one whose only segment never durably opened) is
-// created rather than resumed. On success the caller owns both halves:
-// the Store (release with store_destroy, after every snapshot) and the
-// Writer (writer_destroy) — s is initialized here and left empty on
-// failure.
+// created rather than resumed. On success the caller owns the store
+// with its writer inside it (s.writer, which apply commits through),
+// and releases both with store_close after every snapshot — s is
+// initialized here and left empty on failure.
 //
 // Failures keep their own taxonomies rather than being flattened:
 // `err` is the open path's verdict, passed through untouched — with
@@ -56,28 +56,27 @@ store_open :: proc(
 	target_size := SEGMENT_TARGET_SIZE,
 	allocator := context.allocator,
 ) -> (
-	w: Writer,
 	tear: Tear,
 	err: Open_Error,
 	load_err: Load_Error,
 	write_err: Writer_Error,
 ) {
 	store_init(s, allocator)
+	w := &s.writer
 
 	r, rtear, rerr := recover(dir, ops, allocator)
 	tear = rtear
 	fresh := rerr == .No_Store
 	if !fresh && rerr != .None {
 		store_destroy(s)
-		return {}, tear, rerr, .None, .None
+		return tear, rerr, .None, .None
 	}
 
 	if fresh {
-		w, write_err = writer_create(dir, ops, target_size, allocator)
+		w^, write_err = writer_create(dir, ops, target_size, allocator)
 		if write_err != .None {
-			writer_destroy(&w)
-			store_destroy(s)
-			return {}, tear, .None, .None, write_err
+			store_close(s)
+			return tear, .None, .None, write_err
 		}
 	} else {
 		ld: Loader
@@ -87,7 +86,7 @@ store_open :: proc(
 		loader_destroy(&ld) // the live map dies before the sort allocates
 		if rperr != .None {
 			store_destroy(s)
-			return {}, tear, rperr, load_err, .None
+			return tear, rperr, load_err, .None
 		}
 		r = r2
 	}
@@ -97,11 +96,10 @@ store_open :: proc(
 	store_publish(s)
 
 	if !fresh {
-		w, write_err = writer_open(dir, ops, r, target_size, allocator)
+		w^, write_err = writer_open(dir, ops, r, target_size, allocator)
 		if write_err != .None {
-			writer_destroy(&w)
-			store_destroy(s)
-			return {}, tear, .None, .None, write_err
+			store_close(s)
+			return tear, .None, .None, write_err
 		}
 	}
 
@@ -110,10 +108,9 @@ store_open :: proc(
 	// fresh store).
 	current := transmute([]byte)string(ENV_NOTE_V1)
 	if len(s.notes) == 0 || string(s.notes[len(s.notes)-1].payload) != ENV_NOTE_V1 {
-		if write_err = writer_note(&w, current); write_err != .None {
-			writer_destroy(&w)
-			store_destroy(s)
-			return {}, tear, .None, .None, write_err
+		if write_err = writer_note(w, current); write_err != .None {
+			store_close(s)
+			return tear, .None, .None, write_err
 		}
 		// Mirror it residently, keyed by the epoch it follows, so
 		// store_note_at answers about this boot without another replay.
@@ -122,5 +119,5 @@ store_open :: proc(
 		append(&s.notes, Env_Note{last_epoch = u32(w.prev_epoch), payload = cloned})
 	}
 
-	return w, tear, .None, .None, .None
+	return tear, .None, .None, .None
 }

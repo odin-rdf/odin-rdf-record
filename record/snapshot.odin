@@ -113,8 +113,20 @@ Snapshot :: struct {
 // store_build_term_index or store_merge_term_index since the last
 // append — publication is the apply/publish boundary, and a set
 // covering facts or terms its arrays do not sort would answer wrongly,
-// so both are asserted. Boot calls it once; Apply calls it per commit.
+// so both are asserted. Boot calls it once. apply calls its two halves
+// separately — build_index_set before the fsync, for the candidate the
+// validator sees; install_index_set after it.
 store_publish :: proc(s: ^Store) {
+	install_index_set(s, build_index_set(s))
+}
+
+// build_index_set takes the store's built arrays into a fresh set —
+// the candidate — and returns it unpublished, holding the one
+// reference the store will own once it is installed. A candidate that
+// is not installed is released with release_set, which frees what it
+// took.
+@(private)
+build_index_set :: proc(s: ^Store) -> ^Index_Set {
 	set := new(Index_Set, s.allocator)
 	for o in Order {
 		assert(len(s.ord[o]) == int(s.n_facts), "store_publish: permutations not built over the current facts")
@@ -134,7 +146,14 @@ store_publish :: proc(s: ^Store) {
 	set.n_facts = s.n_facts
 	set.n_terms = u32(len(s.dict.off))
 	set.refs = 1 // the store's own reference
+	return set
+}
 
+// install_index_set publishes a built set: the swap and the epoch
+// store under the mutex, then the store's reference to the superseded
+// set released outside it (package comment).
+@(private)
+install_index_set :: proc(s: ^Store, set: ^Index_Set) {
 	sync.mutex_lock(&s.mu)
 	old := s.idx
 	sync.atomic_store_explicit(&s.idx, set, .Release)

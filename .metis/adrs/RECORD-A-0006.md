@@ -56,6 +56,18 @@ Three parts:
    may touch the real structures before the fsync, so only the store can
    provide this honestly. It is part of the published API, usable by any
    hook.
+
+   > **Amended 2026-08-20 (RECORD-I-0003 decision 1, RECORD-T-0015).** The
+   > overlay view is the candidate `Snapshot` at E+1, not a second read
+   > surface: the store applies the changeset to writer-private resident
+   > state *before* the fsync — state no published reader can observe,
+   > since every reader is bounded by its index set — builds the candidate
+   > index set, and hands the hook an ordinary snapshot over it. "Nothing
+   > may touch the real structures before the fsync" meant "nothing a
+   > reader can observe may change before it, and nothing is published
+   > before it", and that is what holds; a refusal or a writer failure
+   > rolls the resident mutation back exactly. `log.md` §7.1 carries the
+   > same amendment.
 3. **The shape catalogue and the validator live with odin-rdf-shacl.**
    Compiling `sh:` structures is that repository's whole competence; the
    catalogue (`api.md` §13.7) is the front half of its validator with a

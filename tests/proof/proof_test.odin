@@ -5,6 +5,7 @@ import "core:os"
 import "core:testing"
 
 import rec "../../record"
+import "rdf:rdf"
 
 // The cross-implementation suite (RECORD-T-0006): the Odin verifier
 // and the Python verifier — written from log.md alone, under
@@ -96,19 +97,18 @@ build_proof_store :: proc(t: ^testing.T) {
 	// injured case downstream now also proves that resume produced a
 	// chain an independent implementation accepts.
 	s: rec.Store
-	w2, tear, oerr, lerr, werr := rec.store_open(&s, STORE, rec.posix_file_ops())
+	tear, oerr, lerr, werr := rec.store_open(&s, STORE, rec.posix_file_ops())
 	testing.expect_value(t, oerr, rec.Open_Error.None)
 	testing.expect_value(t, lerr, rec.Load_Error.None)
 	testing.expect_value(t, werr, rec.Writer_Error.None)
 	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
 	ops5 := [1]rec.Fact_Op{{op = .Assert, s = 3, p = 2, o = five, g = 1}}
-	testing.expect_value(t, rec.writer_commit(&w2, {epoch = 5, wall = WALL + 4, ops = ops5[:]}), rec.Writer_Error.None)
+	testing.expect_value(t, rec.writer_commit(&s.writer, {epoch = 5, wall = WALL + 4, ops = ops5[:]}), rec.Writer_Error.None)
 
-	proof_head = w2.head
-	proof_epoch = w2.prev_epoch
-	proof_next_term = w2.next_term_id
-	testing.expect_value(t, rec.writer_destroy(&w2), rec.Writer_Error.None)
-	rec.store_destroy(&s)
+	proof_head = s.writer.head
+	proof_epoch = s.writer.prev_epoch
+	proof_next_term = s.writer.next_term_id
+	rec.store_close(&s)
 }
 
 @(private = "file")
@@ -473,4 +473,96 @@ test_cross_implementation :: proc(t: ^testing.T) {
 			c.name, c.verdict, odin_line,
 		)
 	}
+}
+
+// --- the apply-written corpus (RECORD-T-0015) ------------------------------
+
+APPLY_STORE :: "build/proof/apply"
+
+// verify_both runs both implementations over a directory and returns
+// their canonical lines, in the temp allocator.
+@(private = "file")
+verify_both :: proc(t: ^testing.T, dir: string) -> (odin_line, py_line: string) {
+	r, tear, verr := rec.verify(dir, rec.posix_file_ops())
+	odin_line = canon(r, tear, verr)
+	state, stdout, stderr, perr := os.process_exec({command = {"python3", PY, dir}}, context.allocator)
+	defer delete(stdout)
+	defer delete(stderr)
+	testing.expect(t, perr == nil && state.exited, "the python verifier runs")
+	line := string(stdout)
+	if len(line) > 0 && line[len(line)-1] == '\n' {
+		line = line[:len(line)-1]
+	}
+	py_line = fmt.tprintf("%s", line)
+	return
+}
+
+// test_cross_implementation_apply writes a store through apply alone —
+// the startup note, six epochs of every term shape with a retract and
+// a named graph, rotating twice under a small target — and puts it
+// under both verifiers, clean and with its tail torn. Apply's bytes
+// are commit_encode's bytes by construction; this is the check that
+// construction holds all the way to an implementation that shares
+// nothing with this one but log.md.
+@(test)
+test_cross_implementation_apply :: proc(t: ^testing.T) {
+	os.make_directory("build")
+	os.make_directory("build/proof")
+	os.make_directory(APPLY_STORE)
+	for i in 1 ..= 8 {
+		os.remove(fmt.tprintf("%s/%06d.rlog", APPLY_STORE, i))
+	}
+	os.remove(APPLY_STORE + "/HEAD")
+
+	s: rec.Store
+	_, oerr, lerr, werr := rec.store_open(&s, APPLY_STORE, rec.posix_file_ops(), 600)
+	testing.expect_value(t, oerr, rec.Open_Error.None)
+	testing.expect_value(t, lerr, rec.Load_Error.None)
+	testing.expect_value(t, werr, rec.Writer_Error.None)
+	alice, knows := rdf.IRI("http://example.org/alice"), rdf.IRI("http://example.org/knows")
+	g := rdf.IRI("http://example.org/g")
+	quad :: proc(s, p, o: rdf.Term, g: rdf.Graph_Label = nil) -> rdf.Quad {
+		return {triple = {s, p, o}, graph = g}
+	}
+	changesets := [?][]rec.Op{
+		{{.Assert, quad(alice, knows, rdf.IRI("http://example.org/bob"))}},
+		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}, g)}},
+		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "Alice", datatype = rdf.RDF_LANG_STRING, language = "en"})}},
+		{{.Retract, quad(alice, knows, rdf.IRI("http://example.org/bob"))}, {.Assert, quad(rdf.Blank_Node("b0"), knows, alice, g)}},
+		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "1.5", datatype = "http://www.w3.org/2001/XMLSchema#decimal"})}},
+		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "2024-02-29", datatype = rec.XSD_DATE}, g)}},
+	}
+	for cs, i in changesets {
+		e, _, aerr := rec.apply(&s, {ops = cs, actor = alice, reason = rdf.Literal{lexical = "proof", datatype = rdf.XSD_STRING}})
+		testing.expect_value(t, aerr, rec.Apply_Error{})
+		testing.expect_value(t, e, u32(i+1))
+	}
+	testing.expect(t, s.writer.seg_no >= 2, "the log rotated under apply")
+	head := s.writer.head
+	testing.expect_value(t, rec.store_close(&s), rec.Writer_Error.None)
+
+	odin_line, py_line := verify_both(t, APPLY_STORE)
+	hexbuf: [64]byte
+	want := fmt.tprintf("clean %s 6", hex_of(head, hexbuf[:]))
+	testing.expectf(t, odin_line == py_line, "apply-written clean: odin %q, python %q", odin_line, py_line)
+	testing.expectf(t, odin_line == want, "apply-written clean: both said %q, want %q", odin_line, want)
+
+	// Tear the tail: cut the last segment seven bytes short. Both must
+	// see the same torn tail at the same offset, with the same head.
+	last := 0
+	for i := 1; ; i += 1 {
+		if !os.exists(fmt.tprintf("%s/%06d.rlog", APPLY_STORE, i)) {
+			break
+		}
+		last = i
+	}
+	path := fmt.tprintf("%s/%06d.rlog", APPLY_STORE, last)
+	data, rerr := os.read_entire_file_from_path(path, context.allocator)
+	defer delete(data)
+	testing.expect(t, rerr == nil, "the tail segment reads")
+	werr2 := os.write_entire_file(path, data[:len(data)-7])
+	testing.expect(t, werr2 == nil, "the torn tail writes")
+	odin_torn, py_torn := verify_both(t, APPLY_STORE)
+	testing.expectf(t, odin_torn == py_torn, "apply-written torn: odin %q, python %q", odin_torn, py_torn)
+	testing.expectf(t, len(odin_torn) > 9 && odin_torn[:9] == "torn-tail", "apply-written torn: both said %q", odin_torn)
 }

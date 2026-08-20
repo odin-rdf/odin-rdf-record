@@ -9,6 +9,7 @@ import "core:testing"
 import "core:time"
 
 import rec "../../record"
+import "rdf:rdf"
 
 // The scale measurement (RECORD-T-0006): a synthetic ISMS-shaped log —
 // ~4x10^5 fact operations over ~10^5 distinct terms with realistic
@@ -47,60 +48,6 @@ splitmix :: proc(s: ^u64) -> u64 {
 	z = (z ~ (z >> 30)) * 0xBF58476D1CE4E5B9
 	z = (z ~ (z >> 27)) * 0x94D049BB133111EB
 	return z ~ (z >> 31)
-}
-
-@(private = "file")
-Mem_File :: struct {
-	name: string, // cloned
-	data: [dynamic]u8,
-}
-
-@(private = "file")
-Mem_FS :: struct {
-	files: [dynamic]Mem_File,
-}
-
-@(private = "file")
-mem_ops :: proc(fs: ^Mem_FS) -> rec.File_Ops {
-	return {
-		data = fs,
-		create = proc(data: rawptr, path: string) -> (rec.File_Handle, bool) {
-			fs := (^Mem_FS)(data)
-			append(&fs.files, Mem_File{name = strings.clone(path)})
-			return rec.File_Handle(len(fs.files)), true
-		},
-		append = proc(data: rawptr, f: rec.File_Handle, bytes: []byte) -> bool {
-			fs := (^Mem_FS)(data)
-			append(&fs.files[int(f)-1].data, ..bytes)
-			return true
-		},
-		sync = proc(data: rawptr, f: rec.File_Handle) -> bool {return true},
-		close = proc(data: rawptr, f: rec.File_Handle) -> bool {return true},
-		sync_dir = proc(data: rawptr, dir: string) -> bool {return true},
-		put_file = proc(data: rawptr, path: string, content: []byte) -> bool {
-			fs := (^Mem_FS)(data)
-			for &f in fs.files {
-				if f.name == path {
-					clear(&f.data)
-					append(&f.data, ..content)
-					return true
-				}
-			}
-			append(&fs.files, Mem_File{name = strings.clone(path)})
-			append(&fs.files[len(fs.files)-1].data, ..content)
-			return true
-		},
-	}
-}
-
-@(private = "file")
-mem_destroy :: proc(fs: ^Mem_FS) {
-	for &f in fs.files {
-		delete(f.name)
-		delete(f.data)
-	}
-	delete(fs.files)
-	fs^ = {}
 }
 
 @(private = "file")
@@ -225,8 +172,8 @@ gen_object :: proc(g: ^Gen) -> u64 {
 // the writer's end state for the replay cross-check.
 @(private = "file")
 gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_epoch: u64, terms: u64, sizes: int, live: int) {
-	fs: Mem_FS
-	defer mem_destroy(&fs)
+	fs: rec.Mem_FS
+	defer rec.mem_fs_destroy(&fs)
 	g: Gen
 	g.rng = seed
 	g.next_term = 1
@@ -245,7 +192,7 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 		delete(g.arena)
 	}
 
-	w, err := rec.writer_create(dir, mem_ops(&fs))
+	w, err := rec.writer_create(dir, rec.mem_file_ops(&fs))
 	defer rec.writer_destroy(&w)
 	testing.expect_value(t, err, rec.Writer_Error.None)
 
@@ -562,12 +509,11 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	// a first run.
 	{
 		s: rec.Store
-		w, _, err, lerr, werr := rec.store_open(&s, dir, ops)
+		_, err, lerr, werr := rec.store_open(&s, dir, ops)
 		testing.expect_value(t, err, rec.Open_Error.None)
 		testing.expect_value(t, lerr, rec.Load_Error.None)
 		testing.expect_value(t, werr, rec.Writer_Error.None)
-		rec.writer_destroy(&w)
-		rec.store_destroy(&s)
+		rec.store_close(&s)
 	}
 
 	// The measured boot.
@@ -578,7 +524,7 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 
 	s: rec.Store
 	start := time.tick_now()
-	w, tear, err, lerr, werr := rec.store_open(&s, dir, ops, rec.SEGMENT_TARGET_SIZE, alloc)
+	tear, err, lerr, werr := rec.store_open(&s, dir, ops, rec.SEGMENT_TARGET_SIZE, alloc)
 	boot_ms := time.duration_milliseconds(time.tick_since(start))
 	testing.expect_value(t, err, rec.Open_Error.None)
 	testing.expect_value(t, lerr, rec.Load_Error.None)
@@ -631,8 +577,7 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	testing.expect(t, boot_ms < 1000, "full boot stays under a second")
 	testing.expect(t, resident > accounted, "the walked structures are within what the tracker saw")
 
-	rec.writer_destroy(&w)
-	rec.store_destroy(&s)
+	rec.store_close(&s)
 
 	// The phase breakdown, over the same store: recover + replay-into-
 	// the-build versus the permutation sort — the same decomposition
@@ -677,4 +622,111 @@ test_scale_bulk_loaded :: proc(t: ^testing.T) {
 @(test)
 test_scale_hand_edited :: proc(t: ^testing.T) {
 	measure(t, "hand-edited", "build/scale/edited", 200_000)
+}
+
+// --- the bulk load through apply (RECORD-T-0015) ------------------------
+
+// test_scale_bulk_apply loads an ISMS-scale corpus as ONE changeset —
+// one epoch, one fsync, the shape log.md par. 7.1 gives bulk import —
+// through apply on the in-memory file seam: OPS_TOTAL asserts over
+// ~10^5 distinct terms of every shape, the quads kept a set by the
+// generator so no precondition fires. Timed for T-0018's record; gated
+// only on succeeding in one epoch with every op a fact.
+@(test)
+test_scale_bulk_apply :: proc(t: ^testing.T) {
+	fs: rec.Mem_FS
+	defer rec.mem_fs_destroy(&fs)
+	s: rec.Store
+	_, err, lerr, werr := rec.store_open(&s, "bulk", rec.mem_file_ops(&fs))
+	testing.expect_value(t, err, rec.Open_Error.None)
+	testing.expect_value(t, lerr, rec.Load_Error.None)
+	testing.expect_value(t, werr, rec.Writer_Error.None)
+	defer rec.store_close(&s)
+
+	Key :: struct {
+		s, p, o, g: u32,
+	}
+	rng := SEED
+	owned := make([dynamic]string)
+	defer {
+		for str in owned {
+			delete(str)
+		}
+		delete(owned)
+	}
+	own :: proc(owned: ^[dynamic]string, str: string) -> string {
+		append(owned, str)
+		return str
+	}
+	N_SUBJECTS :: 10_000
+	N_GRAPHS :: 500
+	N_OBJECTS :: 60_000
+	subjects := make([]rdf.Term, N_SUBJECTS)
+	defer delete(subjects)
+	for &sub, i in subjects {
+		sub = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/asset/%06d", i)))
+	}
+	preds := make([]rdf.Term, 40)
+	defer delete(preds)
+	for &pr, i in preds {
+		pr = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/vocab/p%02d", i)))
+	}
+	graphs := make([]rdf.Graph_Label, N_GRAPHS)
+	defer delete(graphs)
+	for &g, i in graphs {
+		if i > 0 {
+			g = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/graph/%04d", i)))
+		}
+	}
+	objects := make([]rdf.Term, N_OBJECTS)
+	defer delete(objects)
+	for &o, i in objects {
+		switch i % 6 {
+		case 0:
+			o = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/control/%06d", i)))
+		case 1:
+			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("annual review of the asset register %d", i)), datatype = rdf.XSD_STRING}
+		case 2:
+			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("Control objective %d", i)), datatype = rdf.RDF_LANG_STRING, language = "en"}
+		case 3:
+			// Twelve 28-day months: distinct per i, and always a valid date.
+			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("%04d-%02d-%02d", 2000 + i/336, 1 + (i%336)/28, 1 + i%28)), datatype = rec.XSD_DATE}
+		case 4:
+			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("%d", i*13)), datatype = rdf.XSD_INTEGER}
+		case 5:
+			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("%d.%02d", i, i%100)), datatype = "http://www.w3.org/2001/XMLSchema#decimal"}
+		}
+	}
+
+	seen := make(map[Key]bool)
+	defer delete(seen)
+	ops := make([dynamic]rec.Op, 0, OPS_TOTAL)
+	defer delete(ops)
+	for len(ops) < OPS_TOTAL {
+		k := Key{
+			u32(splitmix(&rng) % N_SUBJECTS),
+			u32(splitmix(&rng) % 40),
+			u32(splitmix(&rng) % N_OBJECTS),
+			u32(splitmix(&rng) % N_GRAPHS) if splitmix(&rng)%100 < 30 else 0,
+		}
+		if k in seen {
+			continue
+		}
+		seen[k] = true
+		append(&ops, rec.Op{kind = .Assert, quad = {triple = {subjects[k.s], preds[k.p], objects[k.o]}, graph = graphs[k.g]}})
+	}
+
+	start := time.tick_now()
+	epoch, _, aerr := rec.apply(&s, {ops = ops[:], actor = rdf.IRI("http://example.org/isms/importer")})
+	apply_ms := time.duration_milliseconds(time.tick_since(start))
+	testing.expect_value(t, aerr, rec.Apply_Error{})
+	testing.expect_value(t, epoch, u32(1))
+	testing.expect_value(t, s.n_facts, u32(OPS_TOTAL))
+	testing.expect_value(t, s.published, u32(1))
+	bytes := 0
+	for f in fs.files {
+		bytes += len(f.data)
+	}
+	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
+	log.infof("bulk apply: %d ops, %d terms, %.1f MB log — one epoch in %.0f ms", OPS_TOTAL, len(s.dict.off), mb(bytes), apply_ms)
 }
