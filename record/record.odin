@@ -33,8 +33,9 @@
 // (RECORD-T-0009); read.odin is the pattern-matching read API — Match,
 // Iter, Resolve, Bytes, Term (RECORD-T-0010); boot.odin is store_open,
 // the composition of all of it — recover, replay, sort, publish,
-// writer resume, and the startup environment note (RECORD-T-0011). The
-// CLI
-// (verify, dump, head) lives in tool/ at the repository root,
+// writer resume, and the startup environment note (RECORD-T-0011);
+// intern.odin is the one term encoder and the writer's per-changeset
+// intern — terms to ids, the first piece of Apply (RECORD-T-0013). The
+// CLI (verify, dump, head) lives in tool/ at the repository root,
 // following the family's root-level main-package pattern.
 package record
