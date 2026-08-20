@@ -91,6 +91,14 @@ their side, once that API is real.
 > the repository and its first tag are the owner's — *done the same
 > evening: `odin-rdf/odin-rdf-record`, tag `v0.1.0` at `e29764e`.*
 
+> **Amended 2026-08-20, later the same evening (`v0.2.0`).** The first
+> sibling port found the first gap: `ingest` emitted a document's *list*
+> of statements, and `apply` — correctly — refused the second assert of a
+> statement the document repeated, so a legal document (the W3C SHACL
+> suite's own shacl-shacl shapes graph) could not be loaded. The loaders
+> now emit the document's *set* (RECORD-T-0019); `apply` is unchanged.
+> Tagged `v0.2.0`, the pin odin-rdf-shacl's port moves to.
+
 ## Future State
 
 An embedded store where:

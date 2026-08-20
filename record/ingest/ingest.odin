@@ -3,8 +3,22 @@
 // accepts — four procedures, one per format, and nothing else. This is
 // the loop every consumer would otherwise write three times (the
 // application, the shacl suite, the sparql suite), provided once
-// because the one policy in it — blank-node scoping — is the thing
-// each would get differently wrong.
+// because the two policies in it — blank-node scoping, and the set
+// semantics of a document — are the things each would get differently
+// wrong.
+//
+// # A document is a set
+//
+// An RDF document denotes a graph, and a graph has no duplicates: a
+// statement written twice is stated once. The loaders emit the set —
+// a repeated statement yields one op, at its first position, order
+// otherwise preserved — because apply judges every assert against the
+// changeset's own earlier ops (log.md par. 5.3) and would refuse the
+// second as .Already_Live, turning a valid document into one that
+// cannot be loaded (RECORD-T-0019: the W3C SHACL suite's own
+// shacl-shacl shapes graph lists two predicates twice in one object
+// list). Identity is the quad's, graph included, after the blank
+// prefix is applied; the same triple in two graphs is two ops.
 //
 // It is a subpackage so that the core's imports stay `rdf` alone: a
 // consumer that never ingests documents links no parser. It touches no
@@ -77,7 +91,9 @@ Error :: struct {
 // digits, '_' and '-' — which "upload-1_" is and "upload-1/" is not;
 // the store itself accepts any bytes. (The parser synthesizes its own
 // labels for a document's nodes; the prefix goes in front of those.)
-// The ops own their terms; free them with ops_destroy.
+// The ops are the document's *set* of statements — a repeated one is
+// emitted once, at its first position (see the package doc). The ops
+// own their terms; free them with ops_destroy.
 turtle :: proc(
 	src: []byte,
 	graph: rdf.Graph_Label,
@@ -93,12 +109,15 @@ turtle :: proc(
 	turtle.parser_init(&p, src, base, allocator)
 	defer turtle.parser_destroy(&p)
 	acc := make([dynamic]record.Op, allocator)
+	seen: Seen
+	seen_init(&seen, allocator)
+	defer seen_destroy(&seen)
 	for {
 		t, ok := turtle.parser_next(&p)
 		if !ok {
 			break
 		}
-		if !push(&acc, kind, rdf.Quad{triple = t, graph = graph}, blank_prefix, allocator) {
+		if !push(&acc, &seen, kind,rdf.Quad{triple = t, graph = graph}, blank_prefix, allocator) {
 			return fail(&acc, allocator, .Allocation, {})
 		}
 	}
@@ -125,12 +144,15 @@ ntriples :: proc(
 	triples.parser_init(&p, src, allocator)
 	defer triples.parser_destroy(&p)
 	acc := make([dynamic]record.Op, allocator)
+	seen: Seen
+	seen_init(&seen, allocator)
+	defer seen_destroy(&seen)
 	for {
 		t, ok := triples.parser_next(&p)
 		if !ok {
 			break
 		}
-		if !push(&acc, kind, rdf.Quad{triple = t, graph = graph}, blank_prefix, allocator) {
+		if !push(&acc, &seen, kind,rdf.Quad{triple = t, graph = graph}, blank_prefix, allocator) {
 			return fail(&acc, allocator, .Allocation, {})
 		}
 	}
@@ -158,12 +180,15 @@ trig :: proc(
 	trig.parser_init(&p, src, base, allocator)
 	defer trig.parser_destroy(&p)
 	acc := make([dynamic]record.Op, allocator)
+	seen: Seen
+	seen_init(&seen, allocator)
+	defer seen_destroy(&seen)
 	for {
 		q, ok := trig.parser_next(&p)
 		if !ok {
 			break
 		}
-		if !push(&acc, kind, q, blank_prefix, allocator) {
+		if !push(&acc, &seen, kind,q, blank_prefix, allocator) {
 			return fail(&acc, allocator, .Allocation, {})
 		}
 	}
@@ -189,12 +214,15 @@ nquads :: proc(
 	quads.parser_init(&p, src, allocator)
 	defer quads.parser_destroy(&p)
 	acc := make([dynamic]record.Op, allocator)
+	seen: Seen
+	seen_init(&seen, allocator)
+	defer seen_destroy(&seen)
 	for {
 		q, ok := quads.parser_next(&p)
 		if !ok {
 			break
 		}
-		if !push(&acc, kind, q, blank_prefix, allocator) {
+		if !push(&acc, &seen, kind,q, blank_prefix, allocator) {
 			return fail(&acc, allocator, .Allocation, {})
 		}
 	}
@@ -215,10 +243,47 @@ ops_destroy :: proc(ops: []record.Op, allocator: runtime.Allocator) {
 
 // --- internals ---------------------------------------------------------
 
-// push clones one statement into owned memory — blank-node labels
-// prefixed as they are copied — and appends the op.
+// Seen is the set of statements one document has emitted so far: hash
+// buckets over rdf.hash_quad of the owned quad, chained through `next`
+// (`next[i]` is the next op index sharing op i's hash, -1 to end), so
+// the whole set is two allocations per document rather than one per
+// statement. Every hash hit is verified by rdf.equal_quad — a collision
+// costs a comparison, never a dropped statement.
 @(private = "file")
-push :: proc(acc: ^[dynamic]record.Op, kind: record.Op_Kind, q: rdf.Quad, prefix: string, allocator: runtime.Allocator) -> bool {
+Seen :: struct {
+	first: map[u64]int,
+	next:  [dynamic]int,
+}
+
+@(private = "file")
+seen_init :: proc(s: ^Seen, allocator: runtime.Allocator) {
+	s.first = make(map[u64]int, allocator)
+	s.next = make([dynamic]int, allocator)
+}
+
+@(private = "file")
+seen_destroy :: proc(s: ^Seen) {
+	delete(s.first)
+	delete(s.next)
+}
+
+// push clones one statement into owned memory — blank-node labels
+// prefixed as they are copied — and appends the op, unless the document
+// already stated it, in which case the clone is freed and nothing is
+// appended: the ops are the document's set. The clone comes first
+// because identity is the *owned* quad's (prefix applied) and because
+// the parser's terms are only promised to live until the next statement
+// is drained (RDF-A-0001) — a duplicate costs one clone and destroy,
+// and duplicates are rare.
+@(private = "file")
+push :: proc(
+	acc: ^[dynamic]record.Op,
+	seen: ^Seen,
+	kind: record.Op_Kind,
+	q: rdf.Quad,
+	prefix: string,
+	allocator: runtime.Allocator,
+) -> bool {
 	op := record.Op{kind = kind}
 	ok: bool
 	if op.subject, ok = clone_term(q.subject, prefix, allocator); !ok {
@@ -247,10 +312,25 @@ push :: proc(acc: ^[dynamic]record.Op, kind: record.Op_Kind, q: rdf.Quad, prefix
 		rdf.destroy_triple(op.triple, allocator)
 		return false
 	}
+	h := rdf.hash_quad(op.quad)
+	head, chained := seen.first[h]
+	for j := head; chained && j >= 0; j = seen.next[j] {
+		if rdf.equal_quad(acc[j].quad, op.quad) {
+			rdf.destroy_quad(op.quad, allocator)
+			return true
+		}
+	}
+	index := len(acc)
 	if _, aerr := append(acc, op); aerr != nil {
 		rdf.destroy_quad(op.quad, allocator)
 		return false
 	}
+	if _, aerr := append(&seen.next, chained ? head : -1); aerr != nil {
+		pop(acc)
+		rdf.destroy_quad(op.quad, allocator)
+		return false
+	}
+	seen.first[h] = index
 	return true
 }
 

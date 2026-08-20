@@ -289,6 +289,74 @@ test_ingest_blank_prefix :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_ingest_repeated_statement_is_one_op :: proc(t: ^testing.T) {
+	// RECORD-T-0019: a document denotes a graph, a graph is a set, and a
+	// statement written twice is stated once — the loaders emit the set,
+	// because apply would refuse the second assert as Already_Live and a
+	// valid document could not be loaded. The shape is the W3C SHACL
+	// suite's own: a predicate repeated inside one object list.
+	fs: rec.Mem_FS
+	defer rec.mem_fs_destroy(&fs)
+	s: rec.Store
+	open_mem(t, &s, &fs)
+	defer rec.store_close(&s)
+
+	doc := transmute([]byte)string(`
+@prefix ex: <http://example.org/> .
+ex:s ex:p ex:a, ex:b, ex:a ; ex:q _:n, _:n .
+ex:s ex:p ex:b .
+`)
+	on, oerr := ingest.turtle(doc, nil, context.allocator, blank_prefix = "d_")
+	defer ingest.ops_destroy(on, context.allocator)
+	testing.expect_value(t, oerr.kind, ingest.Error_Kind.None)
+	// Three distinct statements, each at its first position, order kept.
+	testing.expect_value(t, len(on), 3)
+	if len(on) == 3 {
+		testing.expect_value(t, on[0].object, rdf.Term(rdf.IRI("http://example.org/a")))
+		testing.expect_value(t, on[1].object, rdf.Term(rdf.IRI("http://example.org/b")))
+		testing.expect_value(t, on[2].object, rdf.Term(rdf.Blank_Node("d_n")))
+	}
+	e1, _, a1 := rec.apply(&s, {ops = on})
+	testing.expect_value(t, a1, rec.Apply_Error{})
+	testing.expect_value(t, live_count(&s, e1), 3)
+
+	// The retract form is the set too: unloading the document retracts
+	// each statement once.
+	off, ferr := ingest.turtle(doc, nil, context.allocator, kind = .Retract, blank_prefix = "d_")
+	defer ingest.ops_destroy(off, context.allocator)
+	testing.expect_value(t, ferr.kind, ingest.Error_Kind.None)
+	testing.expect_value(t, len(off), 3)
+	e2, _, a2 := rec.apply(&s, {ops = off})
+	testing.expect_value(t, a2, rec.Apply_Error{})
+	testing.expect_value(t, live_count(&s, e2), 0)
+
+	// Identity is the quad's: the same triple in two graphs is two
+	// statements, and the third line repeats the first.
+	nq := transmute([]byte)string(
+		"<http://ex/s> <http://ex/p> <http://ex/o> <http://ex/g1> .\n" +
+		"<http://ex/s> <http://ex/p> <http://ex/o> <http://ex/g2> .\n" +
+		"<http://ex/s> <http://ex/p> <http://ex/o> <http://ex/g1> .\n",
+	)
+	g, gerr := ingest.nquads(nq, context.allocator)
+	defer ingest.ops_destroy(g, context.allocator)
+	testing.expect_value(t, gerr.kind, ingest.Error_Kind.None)
+	testing.expect_value(t, len(g), 2)
+
+	// Two documents are two sets: the same statement in each is still
+	// Already_Live at the second apply — dedup is per document, and the
+	// changeset rule is apply's.
+	again, rerr := ingest.turtle(doc, nil, context.allocator, blank_prefix = "d_")
+	defer ingest.ops_destroy(again, context.allocator)
+	testing.expect_value(t, rerr.kind, ingest.Error_Kind.None)
+	both := make([]rec.Op, 6)
+	defer delete(both)
+	copy(both[:3], on)
+	copy(both[3:], again)
+	_, _, a3 := rec.apply(&s, {ops = both})
+	testing.expect_value(t, a3, rec.Apply_Error{.Already_Live, 3})
+}
+
+@(test)
 test_ingest_retract_unloads :: proc(t: ^testing.T) {
 	fs: rec.Mem_FS
 	defer rec.mem_fs_destroy(&fs)
