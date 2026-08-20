@@ -1,5 +1,6 @@
 package record
 
+import "base:runtime"
 import "core:fmt"
 import "core:slice"
 import "core:testing"
@@ -25,8 +26,8 @@ op :: proc(kind: Op_Kind, s, p, o: rdf.Term, g: rdf.Graph_Label = nil) -> Op {
 }
 
 @(private = "file")
-at_open :: proc(t: ^testing.T, s: ^Store, ops: File_Ops, target := SEGMENT_TARGET_SIZE, loc := #caller_location) {
-	_, err, lerr, werr := store_open(s, "store", ops, target)
+at_open :: proc(t: ^testing.T, s: ^Store, ops: File_Ops, target := SEGMENT_TARGET_SIZE, validator := Validator{}, loc := #caller_location) {
+	_, err, lerr, werr := store_open(s, "store", ops, validator, target)
 	testing.expect_value(t, err, Open_Error.None, loc = loc)
 	testing.expect_value(t, lerr, Load_Error.None, loc = loc)
 	testing.expect_value(t, werr, Writer_Error.None, loc = loc)
@@ -508,7 +509,7 @@ test_apply_replay_equivalence_mem :: proc(t: ^testing.T) {
 @(private = "file")
 sweep_apply :: proc(fs: ^OFS) -> (acked: [dynamic]u32) {
 	s: Store
-	_, err, lerr, werr := store_open(&s, "store", ofs_ops(fs), 300)
+	_, err, lerr, werr := store_open(&s, "store", ofs_ops(fs), target_size = 300)
 	if err != .None || lerr != .None || werr != .None {
 		return
 	}
@@ -560,7 +561,7 @@ test_apply_crash_sweep :: proc(t: ^testing.T) {
 			// nothing partial was read, and the next apply continues
 			// the chain.
 			s: Store
-			_, err, lerr, werr := store_open(&s, "store", ofs_ops(&durable), 300)
+			_, err, lerr, werr := store_open(&s, "store", ofs_ops(&durable), target_size = 300)
 			testing.expectf(t, err == .None && lerr == .None && werr == .None, "cut %d half %v: boot %v %v %v", cut, half, err, lerr, werr)
 			last := u32(0)
 			if len(acked) > 0 {
@@ -599,3 +600,199 @@ sweep_consumer :: proc(c: ^Sweep_Count) -> Consumer {
 		},
 	}
 }
+
+// --- the validation hook (RECORD-T-0016) ----------------------------------
+
+// Probe is a validator that records what it saw: the candidate's
+// epoch, whether the changeset's assert and retract are visible in
+// the candidate and in the head, whether a term the changeset defines
+// resolves in each, and the ops it was handed — and answers with a
+// preset verdict.
+@(private = "file")
+Probe :: struct {
+	verdict:          bool,
+	calls:            int,
+	epoch:            u32,
+	n_ops:            int,
+	kinds:            [8]Op_Kind,
+	cand_asserted:    bool, // the asserted quad exists in the candidate
+	cand_retracted:   bool, // the retracted quad exists in the candidate
+	head_asserted:    bool, // ... and in the head, through store_latest
+	head_retracted:   bool,
+	cand_new_term:    bool, // a term the changeset defines resolves in the candidate
+	head_new_term:    bool, // ... and in the head
+	retained:         Snapshot, // the candidate, kept for the identity check after apply
+	asserted, retracted: Op,
+	new_term:         rdf.Term,
+}
+
+@(private = "file")
+probe_exists :: proc(snap: Snapshot, q: Op) -> bool {
+	p: Pattern
+	ok: bool
+	if p.s, ok = snapshot_resolve(snap, q.subject); !ok {
+		return false
+	}
+	if p.p, ok = snapshot_resolve(snap, q.predicate); !ok {
+		return false
+	}
+	if p.o, ok = snapshot_resolve(snap, q.object); !ok {
+		return false
+	}
+	p.g = MATCH_DEFAULT_GRAPH
+	return snapshot_exists(snap, p, {origin = .Any})
+}
+
+@(private = "file")
+probe_check :: proc(data: rawptr, candidate: Snapshot, ops: []Resident_Op, allocator: runtime.Allocator) -> bool {
+	pr := (^Probe)(data)
+	pr.calls += 1
+	pr.epoch = candidate.epoch
+	pr.n_ops = len(ops)
+	for o, i in ops {
+		if i < len(pr.kinds) {
+			pr.kinds[i] = o.kind
+		}
+	}
+	pr.cand_asserted = probe_exists(candidate, pr.asserted)
+	pr.cand_retracted = probe_exists(candidate, pr.retracted)
+	_, pr.cand_new_term = snapshot_resolve(candidate, pr.new_term)
+	head, herr := store_latest(candidate.store)
+	if herr == .None {
+		pr.head_asserted = probe_exists(head, pr.asserted)
+		pr.head_retracted = probe_exists(head, pr.retracted)
+		_, pr.head_new_term = snapshot_resolve(head, pr.new_term)
+		snapshot_release(&head)
+	}
+	pr.retained = candidate
+	// The scratch allocator is usable for transient work.
+	scratch := make([]byte, 16, allocator)
+	delete(scratch, allocator)
+	return pr.verdict
+}
+
+@(test)
+test_apply_validator_sees_the_candidate :: proc(t: ^testing.T) {
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
+	pr := Probe{verdict = true}
+	s: Store
+	at_open(t, &s, mem_file_ops(&fs), validator = Validator{check = probe_check, data = &pr})
+	defer store_close(&s)
+
+	alice, knows, bob, carol := iri("http://ex/alice"), iri("http://ex/knows"), iri("http://ex/bob"), iri("http://ex/carol")
+	first := [1]Op{op(.Assert, alice, knows, bob)}
+	pr.asserted = first[0]
+	pr.retracted = op(.Retract, alice, knows, carol) // nothing to retract yet: absent in both views
+	pr.new_term = bob
+	e1 := at_ok(t, &s, first[:])
+	testing.expect_value(t, e1, u32(1))
+	testing.expect_value(t, pr.calls, 1)
+	testing.expect_value(t, pr.epoch, u32(1))
+	testing.expect_value(t, pr.n_ops, 1)
+	testing.expect_value(t, pr.kinds[0], Op_Kind.Assert)
+	testing.expect(t, pr.cand_asserted && !pr.head_asserted, "the candidate shows the assert; the head does not")
+	testing.expect(t, pr.cand_new_term && !pr.head_new_term, "the candidate resolves the new term; the head does not")
+	// On success the candidate became the published set: same set, now
+	// held by the store (the hook must not keep its own reference).
+	now, _ := store_latest(&s)
+	testing.expect(t, now.idx == pr.retained.idx, "the candidate is the published set after a successful apply")
+	snapshot_release(&now)
+
+	// Retract bob, assert carol: the candidate shows carol and not bob;
+	// the head the other way round.
+	second := [2]Op{op(.Retract, alice, knows, bob), op(.Assert, alice, knows, carol)}
+	pr.asserted = second[1]
+	pr.retracted = second[0]
+	pr.new_term = carol
+	e2 := at_ok(t, &s, second[:])
+	testing.expect_value(t, e2, u32(2))
+	testing.expect_value(t, pr.calls, 2)
+	testing.expect_value(t, pr.epoch, u32(2))
+	testing.expect_value(t, pr.n_ops, 2)
+	testing.expect(t, pr.kinds[0] == .Retract && pr.kinds[1] == .Assert, "the ops arrive in order with their kinds")
+	testing.expect(t, pr.cand_asserted && !pr.cand_retracted, "the candidate is the post-state")
+	testing.expect(t, !pr.head_asserted && pr.head_retracted, "the head is the pre-state")
+	testing.expect(t, pr.cand_new_term && !pr.head_new_term, "the candidate resolves the new term; the head does not")
+
+	// A refused changeset never reaches the hook.
+	_, _, err := apply(&s, {ops = second[1:]}) // carol is live: Already_Live
+	testing.expect_value(t, err, Apply_Error{.Already_Live, 0})
+	testing.expect_value(t, pr.calls, 2)
+}
+
+@(test)
+test_apply_validator_modes :: proc(t: ^testing.T) {
+	// Three stores, one changeset each: A judged false under Enforce,
+	// B judged false under Record, C judged true under Enforce. A
+	// writes nothing and stays identical to a store that never saw the
+	// changeset; B commits with conforms = false; and B's epoch is C's
+	// epoch — the log does not record that a judge objected.
+	a_fs, b_fs, c_fs, z_fs: Mem_FS
+	defer mem_fs_destroy(&a_fs)
+	defer mem_fs_destroy(&b_fs)
+	defer mem_fs_destroy(&c_fs)
+	defer mem_fs_destroy(&z_fs)
+	no := Probe{verdict = false}
+	yes := Probe{verdict = true}
+	a, b, c, z: Store
+	at_open(t, &a, mem_file_ops(&a_fs), validator = {probe_check, &no})
+	at_open(t, &b, mem_file_ops(&b_fs), validator = {probe_check, &no})
+	at_open(t, &c, mem_file_ops(&c_fs), validator = {probe_check, &yes})
+	at_open(t, &z, mem_file_ops(&z_fs))
+	defer store_close(&a)
+	defer store_close(&b)
+	defer store_close(&c)
+	defer store_close(&z)
+
+	alice, knows, bob := iri("http://ex/alice"), iri("http://ex/knows"), iri("http://ex/bob")
+	seed := [1]Op{op(.Assert, alice, knows, bob)}
+	for st in ([4]^Store{&a, &b, &c, &z}) {
+		_, _, err := apply(st, {ops = seed[:], mode = .Record})
+		testing.expect_value(t, err, Apply_Error{})
+	}
+	log_bytes :: proc(fs: ^Mem_FS) -> (n: int) {
+		for f in fs.files {
+			n += len(f.data)
+		}
+		return
+	}
+	a_log := log_bytes(&a_fs)
+	a_head := a.writer.head
+
+	cs := [2]Op{op(.Retract, alice, knows, bob), op(.Assert, bob, knows, rdf.Literal{lexical = "judged"})}
+	_, a_conf, a_err := apply(&a, {ops = cs[:], mode = .Enforce})
+	testing.expect_value(t, a_err, Apply_Error{.Rejected, -1})
+	testing.expect(t, !a_conf, "Enforce: the verdict is reported with the refusal")
+	testing.expect_value(t, log_bytes(&a_fs), a_log)
+	testing.expect(t, a.writer.head == a_head, "Enforce: nothing was appended")
+	testing.expect(t, !a.writer.failed, "a refusal is not a writer failure")
+	same_projection(t, &a, &z, walls = false)
+	testing.expect(t, at_exists(&a, 1, seed[0]), "the retract was rolled back")
+	// A continues normally afterwards.
+	_, _, a_again := apply(&a, {ops = cs[:], mode = .Record})
+	testing.expect_value(t, a_again, Apply_Error{})
+
+	b_e, b_conf, b_err := apply(&b, {ops = cs[:], mode = .Record})
+	testing.expect_value(t, b_err, Apply_Error{})
+	testing.expect(t, !b_conf, "Record: the epoch commits and the verdict is reported")
+	testing.expect_value(t, b_e, u32(2))
+	c_e, c_conf, c_err := apply(&c, {ops = cs[:], mode = .Enforce})
+	testing.expect_value(t, c_err, Apply_Error{})
+	testing.expect(t, c_conf, "Enforce with a conforming changeset commits")
+	testing.expect_value(t, c_e, u32(2))
+	same_projection(t, &b, &c, walls = false)
+
+	// Decision 5: the two logs' epoch-2 commits differ only by their
+	// wall clocks — replay B's and C's logs and compare the projections.
+	b2, c2: Store
+	_, berr, _, _ := store_open(&b2, "store", mem_file_ops(&b_fs))
+	_, cerr, _, _ := store_open(&c2, "store", mem_file_ops(&c_fs))
+	testing.expect_value(t, berr, Open_Error.None)
+	testing.expect_value(t, cerr, Open_Error.None)
+	defer store_close(&b2)
+	defer store_close(&c2)
+	same_projection(t, &b2, &c2, walls = false)
+	same_projection(t, &b, &b2)
+}
+

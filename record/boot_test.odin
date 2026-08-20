@@ -337,7 +337,7 @@ test_boot_cross_restart_sweep :: proc(t: ^testing.T) {
 			// Boot. Every crash state is recoverable, no acknowledged
 			// epoch is lost, and the store continues.
 			s: Store
-			_, err, lerr, werr := store_open(&s, "store", ofs_ops(&durable), 200)
+			_, err, lerr, werr := store_open(&s, "store", ofs_ops(&durable), target_size = 200)
 			testing.expectf(t, err == .None, "cut %d half %v: boot err %v", cut, half, err)
 			testing.expectf(t, lerr == .None && werr == .None, "cut %d half %v: %v %v", cut, half, lerr, werr)
 			last := u64(0)

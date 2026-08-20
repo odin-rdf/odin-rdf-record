@@ -168,6 +168,7 @@ Store :: struct {
 	mu:        sync.Mutex, // taken by acquire (store_latest, store_at) and by publish, and by nothing else (RECORD-I-0003 decision 3)
 	writer:    Writer, // the single writer of the store's directory, resumed by store_open; apply commits through it
 	write_err: Writer_Error, // the writer's last refusal, set by apply beside its .Writer
+	validator: Validator, // the validation hook, wired once by store_open (RECORD-A-0006); nil check = no validation
 	allocator: runtime.Allocator,
 }
 

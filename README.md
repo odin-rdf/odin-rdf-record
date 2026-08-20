@@ -51,7 +51,18 @@ sub-second criterion, resident footprint **22.9 / 25.9 MB** against
 `api.md` §10's ~26–29 MB budget.
 
 Not yet built: `Apply` — the write path with its live-quad preconditions
-and the validation hook — the next initiative. The founding documents in
+and the validation hook — the next initiative. *(Superseded 2026-08-20,
+RECORD-I-0003: `apply` is the one write path — a changeset of asserts and
+retracts in RDF terms, the live-quad preconditions judged against head and
+the changeset's own earlier ops, the resident mutation made before the
+fsync in state no reader can observe and rolled back exactly on failure,
+then append, fsync, publish. The validation hook is a `Validator` wired
+once at `store_open`; the default, no validator, is the consumer's stated
+posture, and the store alone guarantees only "no epoch commits unjudged
+when a judge is wired". Under `Enforce` a refusal writes nothing; under
+`Record` the epoch commits and `conforms` reports the verdict — **the log
+does not record that a judge objected**; a consumer that wants the verdict
+durable writes it as facts.)* The founding documents in
 [`doc/design/`](doc/design/) remain the spec: the on-disk format
 ([`log.md`](doc/design/log.md)), the resident layout and the
 pattern-matching API ([`api.md`](doc/design/api.md)), and the premises

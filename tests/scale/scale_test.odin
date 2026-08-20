@@ -524,7 +524,7 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 
 	s: rec.Store
 	start := time.tick_now()
-	tear, err, lerr, werr := rec.store_open(&s, dir, ops, rec.SEGMENT_TARGET_SIZE, alloc)
+	tear, err, lerr, werr := rec.store_open(&s, dir, ops, allocator = alloc)
 	boot_ms := time.duration_milliseconds(time.tick_since(start))
 	testing.expect_value(t, err, rec.Open_Error.None)
 	testing.expect_value(t, lerr, rec.Load_Error.None)

@@ -47,6 +47,7 @@
 // writer, one store, one call at a time (log.md par. 10).
 package record
 
+import "base:runtime"
 import "core:sync"
 import "core:time"
 
@@ -109,16 +110,44 @@ Apply_Error :: struct {
 }
 
 // Resident_Op is an op with its terms interned — what the validator
-// (RECORD-T-0016) sees beside the candidate snapshot.
+// sees beside the candidate snapshot. g is 0 for the default graph, as
+// a fact stores it.
 Resident_Op :: struct {
 	kind:       Op_Kind,
 	s, p, o, g: u32,
 }
 
+// Validator is the validation hook (RECORD-A-0006): wired once at
+// store_open, never per call, so no entrance can skip the gate; a nil
+// `check` means no validation, which is the consumer's stated posture
+// rather than a per-caller escape. apply invokes `check` once per
+// changeset, on the writer's thread, between building the candidate
+// and writing a byte: `candidate` is the post-state as an ordinary
+// snapshot pinned at the new epoch — the overlay view, through the
+// same read API as any other snapshot, so snapshot_exists sees the
+// asserted quads and not the retracted ones, and snapshot_resolve finds
+// every term the changeset defines — and `ops` are the changeset's ops
+// with their terms interned. The pre-state is a store_latest away
+// (apply holds no lock while the hook runs) and must be released like
+// any snapshot. `allocator` is apply's scratch, for the hook's
+// transient needs only. The candidate must not be retained: it is
+// published or freed the moment the hook returns. The hook returns
+// the verdict; what it reports, and to whom, is its own business — the
+// store never interprets a report.
+Validator :: struct {
+	check: proc(data: rawptr, candidate: Snapshot, ops: []Resident_Op, allocator: runtime.Allocator) -> bool,
+	data:  rawptr,
+}
+
 // apply commits one changeset as the next epoch: the epoch number on
-// success, `conforms` (always true until a validator is wired), and
-// a zero Apply_Error. On any error the store is exactly as it was,
-// and the epoch was not issued. Scratch — the intern's table, the
+// success, the validator's verdict as `conforms`, and a zero
+// Apply_Error. On any error the store is exactly as it was, and the
+// epoch was not issued. `conforms` is meaningful only with a validator
+// wired (it is true otherwise); under .Enforce a false verdict is the
+// error .Rejected and nothing is written, under .Record the epoch
+// commits and `conforms` reports — and the log does not record that a
+// judge objected (RECORD-I-0003 decision 5): a consumer that wants the
+// verdict durable writes it as facts. Scratch — the intern's table, the
 // plan, the effects map — comes from `allocator` and is freed before
 // returning; everything the store keeps comes from the store's own.
 // The wall time is this clock, Unix nanoseconds UTC: evidence, not
@@ -245,9 +274,25 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 	store_merge_term_index(s, head.idx.terms)
 	candidate := build_index_set(s)
 	assert(candidate.epoch == E, "apply: the candidate set is not at the new epoch")
-	// RECORD-T-0016: the validator runs here, over Snapshot{E, candidate, s}
-	// and the plan's resident ops; Enforce refuses with .Rejected through
-	// the same rollback as the writer's failure below.
+
+	// Validate, over the candidate as a snapshot — the overlay view.
+	// The snapshot is handed out without a reference of its own: the
+	// candidate's one reference is the store's, and it is published or
+	// freed when the hook returns, so a hook that retains it holds a
+	// dangling set (Validator's contract).
+	if s.validator.check != nil {
+		rops := make([]Resident_Op, len(plan), allocator)
+		defer delete(rops, allocator)
+		for p, i in plan {
+			rops[i] = Resident_Op{kind = p.kind, s = p.q.s, p = p.q.p, o = p.q.o, g = p.q.g}
+		}
+		conforms = s.validator.check(s.validator.data, Snapshot{epoch = E, idx = candidate, store = s}, rops, allocator)
+		if !conforms && c.mode == .Enforce {
+			release_set(s, candidate)
+			rollback(s, mark, touched[:])
+			return 0, conforms, {.Rejected, -1}
+		}
+	}
 
 	// Encode, append, fsync — the durability boundary.
 	fact_ops := make([]Fact_Op, len(plan), allocator)

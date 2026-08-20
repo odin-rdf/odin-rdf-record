@@ -515,7 +515,7 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 	os.remove(APPLY_STORE + "/HEAD")
 
 	s: rec.Store
-	_, oerr, lerr, werr := rec.store_open(&s, APPLY_STORE, rec.posix_file_ops(), 600)
+	_, oerr, lerr, werr := rec.store_open(&s, APPLY_STORE, rec.posix_file_ops(), target_size = 600)
 	testing.expect_value(t, oerr, rec.Open_Error.None)
 	testing.expect_value(t, lerr, rec.Load_Error.None)
 	testing.expect_value(t, werr, rec.Writer_Error.None)

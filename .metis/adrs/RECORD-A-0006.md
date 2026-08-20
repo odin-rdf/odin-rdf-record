@@ -108,3 +108,48 @@ without this repository ever naming it.
 - `Record` mode's question — do findings become facts in a quarantine
   graph? — interacts with RECORD-A-0002 and stays open on the consumer's
   side; nothing in the store blocks either answer.
+
+## As built — 2026-08-20 (RECORD-T-0015, RECORD-T-0016)
+
+The signatures this ADR left to the first implementation:
+
+```odin
+Validator :: struct {
+	check: proc(data: rawptr, candidate: Snapshot, ops: []Resident_Op, allocator: runtime.Allocator) -> bool,
+	data:  rawptr,
+}
+Resident_Op :: struct { kind: Op_Kind, s, p, o, g: u32 }
+Mode        :: enum u8 { Enforce, Record }
+
+store_open :: proc(s: ^Store, dir: string, ops: File_Ops, validator := Validator{}, …)
+apply      :: proc(s: ^Store, c: Changeset, …) -> (epoch: u32, conforms: bool, err: Apply_Error)
+```
+
+- **Part 1 as built.** `store_open` takes the validator and nothing else
+  does; `apply` calls `check` once per changeset, on the writer's thread,
+  after the candidate is built and before a byte is written. A nil `check`
+  is no validation. Under `.Enforce` a false verdict is `.Rejected` and the
+  same exact rollback a writer failure takes; under `.Record` the epoch
+  commits and `conforms` carries the verdict.
+- **Part 2 as built — the overlay view is the candidate snapshot.** The
+  store applies the changeset to writer-private resident state before the
+  fsync (RECORD-I-0003 decision 1, amended above) and hands the hook
+  `Snapshot{epoch = E+1, idx = candidate}`: the post-state through the
+  ordinary read API — `snapshot_exists` sees the asserted quads and not the
+  retracted ones, `snapshot_resolve` finds every term the changeset defines
+  — with no second read surface to keep in agreement with the first. The
+  pre-state is `store_latest` away (no lock is held during the hook). The
+  candidate is published or freed when the hook returns and must not be
+  retained.
+- **Decision 5, stated plainly.** `Record` mode leaves no trace in the
+  chain: a `Record`-mode epoch whose changeset did not conform is
+  byte-for-byte the epoch an `Enforce`-mode conforming changeset would have
+  written, and replays identically. The log records what was asserted and
+  retracted, by whom and why — not that a judge objected. A consumer that
+  wants the verdict durable writes its report as facts in the same or a
+  following changeset; the quarantine-graph question stays on the
+  consumer's side, as the Neutral consequence above left it.
+- **Part 3 unchanged.** Nothing in this repository names an `sh:` term;
+  the catalogue and the validator are odin-rdf-shacl's, binding through
+  `Validator` and the snapshot API alone.
+

@@ -49,10 +49,15 @@ ENV_NOTE_V1 :: `{"format":1,"derived":"none"}`
 // mirrored into the resident note table — only when it differs. A
 // fresh store always differs, so the first record after any store's
 // header is the note that makes the log self-describing.
+//
+// The validator (RECORD-A-0006) is wired here and only here, so every
+// changeset apply commits is judged by it; the default, no validator,
+// is the consumer's stated posture.
 store_open :: proc(
 	s: ^Store,
 	dir: string,
 	ops: File_Ops,
+	validator := Validator{},
 	target_size := SEGMENT_TARGET_SIZE,
 	allocator := context.allocator,
 ) -> (
@@ -62,6 +67,7 @@ store_open :: proc(
 	write_err: Writer_Error,
 ) {
 	store_init(s, allocator)
+	s.validator = validator
 	w := &s.writer
 
 	r, rtear, rerr := recover(dir, ops, allocator)
