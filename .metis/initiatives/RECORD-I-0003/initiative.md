@@ -572,3 +572,81 @@ wired validator the post-state before any byte is durable, and whose
 apply-written log verifies under both verifiers and replays to the same
 projection — at which point the odin-rdf-shacl port initiative (on its
 side) is unblocked, and the odin-rdf-sparql port after it.
+## Session handoff — 2026-08-20, before implementation begins
+
+Written at the end of the session that drafted this initiative, for the
+session that implements it. Everything decided is above; this section
+holds what was *learned* and is not recorded anywhere else.
+
+**1. Start with RECORD-T-0013, and read these first.** The Design
+decisions section (ten items) and the task's acceptance criteria. Then
+the code the task touches: `record/read.odin` (`probe_encode` at the
+file's end is the encoder-to-be; `res_inline_encode`,
+`canonical_integer`, `canonical_date` are its inline gate;
+`INLINE_LEXICAL_MAX` is 16), `record/term.odin` (the decoder and
+`TERM_TAG_*` — confirm they are exported; this session assumed so),
+`record/encode.odin` (`Commit`, `Term_Def`, `Fact_Op`, `commit_encode`
+takes `next_term_id` and assigns definition ids sequentially — the
+intern's pending ids must match that numbering exactly).
+`probe_encode` resolves a typed literal's datatype through
+`snapshot_resolve`; the intern must resolve it through published *or
+pending*, which is the one place the promoted encoder differs from the
+probe.
+
+**2. Three facts about the existing code that shape T-0014/T-0015, found
+by reading, not yet in any document.** (a) `store_publish`
+(`snapshot.odin`) both *builds* the `Index_Set` and *installs* it in
+one procedure, asserting `len(s.ord[o]) == n_facts` and moving `s.ord`
+into the set; T-0015 needs it split into build-candidate and install,
+because the hook runs between them. (b) `dict_add` appends to
+`chunks`/`used`/`off`; rollback must restore `used[c]`, truncate `off`,
+and free chunks allocated during the failed apply — safe because chunks
+never move and readers are bounded by the published `n_terms`.
+(c) `store_at` carries a retry loop for the acquire window; T-0014
+removes it with the mutex rather than keeping both.
+
+**3. The sibling survey, condensed — T-0018's handoff will need it and
+the siblings' initiatives do not exist yet.** sparql's core imports
+`store:store` as *vocabulary only* in 7 files (`Term_ID` ×112,
+`UNBOUND` ×51, `Match_Pattern`, `Encoded_Quad`, `WILDCARD`,
+`DEFAULT_GRAPH`, `id_kind` ×3, `SENTINEL_CONSUMER_FIRST`), never
+`kvstore`; binding is parapoly `$MATCH/$NEXT/$DESTROY` on
+`Exec(D, It)` (`sparql/exec.odin:628`) plus runtime seams
+`Term_Loader`/`Term_Finder`/`Triple_Reader`; `sparql/kvstore/eval.odin`
+is 492 lines consuming 11 kvstore names. shacl's core imports `store`
+in 10 files (`id_kind` ×8); compile is the same parapoly shape
+(`shacl/query.odin:30`), validate is a runtime `Access` struct of four
+verbs (`shacl/validate.odin:48`); `shacl/kvstore` is 807 lines
+consuming 16 names (`load_turtle`, `find_graph_label` among them).
+Test harnesses: ~170 call sites in sparql (15 files), ~300 in shacl
+(20 files), almost all `open_ephemeral` + `load_turtle` + `close`. CI
+pins `odin-rdf-store@v0.6.0` and `odin-rdf-parser@v0.1.0`. The port
+plan: keep the engines at 64-bit `Term_ID`, widen record's `u32` at the
+seam so store sentinels and computed-term ids sit above 2³²; shacl
+first, sparql second; `snapshot_kind` replaces `id_kind`;
+`session_init_txn` becomes a `Validator`. 20 of sparql's vendored data
+files use triple terms — a sparql-side recorded limit.
+
+**4. Family documents that now disagree with this initiative, on
+purpose until T-0018.** The family `CLAUDE.md`, `README.md` and
+`.metis/vision.md` still say "a second store beside odin-rdf-store, not
+a replacement". The owner's decision of 2026-08-20 supersedes that;
+T-0018 amends all three with dated notes, old text standing. A session
+that notices the contradiction should not "fix" it earlier.
+
+**5. Process notes that cost this session time.** Metis: a document
+file written directly must keep its frontmatter's closing `---` or the
+index silently drops it (check with `list_documents`); `edit_document`
+refuses after any external write — edit the file directly or
+`read_document` first. The shell's working directory resets to the
+workspace root between calls — use absolute paths into the repo. Odin:
+`using quad: rdf.Quad` in `Op` is expected to pass `-vet -strict-style`
+because `rdf.Quad` itself uses `using triple`; verify at T-0015 and, if
+it does not, drop `using` and keep the field (`op.quad.subject`) — the
+decision is the type, not the sugar. I-0002's toolchain notes (os2-shaped
+`core:os`, `#sparse` enumerated arrays, never many real fsyncs in a
+test) still apply.
+
+**6. Spelling decided in passing.** `Changeset` is one word — the VCS
+and Ecto sense the founding documents use — beside the split
+`Index_Set`; say so in the type's doc comment so it is not re-litigated.
