@@ -125,4 +125,43 @@ None on record's side. Filed from odin-rdf-shacl's SHACL-I-0004 port
 
 ## Status Updates **[REQUIRED]**
 
-*To be added during implementation*
+**2026-08-20 — implemented and released as `v0.3.0`** (`6b7fcf3`; this
+note follows the tag by one commit). `record/ids.odin` declares `Term_ID`,
+`Fact_ID` and `Epoch` as `distinct u32`, each with the meaning of its `0`.
+Every public procedure and struct in the table above carries them —
+`Pattern`, `Filter.graphs`, `Range`, `Scan`, `Quad`, `Fact`, `Resident_Op`,
+`Epoch_Meta`, `Env_Note`, `Snapshot`, `Index_Set`, `Store`'s permutations,
+term index and `published`; `apply` returns an `Epoch`; `store_at`,
+`snapshot_epoch_meta`, `store_epoch_meta`, `store_note_at` take one;
+`scan_next`, `snapshot_fact/visible/derived`, `store_fact`, `fact_append`,
+`rollback` speak `Fact_ID`; `snapshot_resolve/kind/bytes/term`,
+`dict_bytes`, `dict_add`, `intern_term/graph`, `term_inline`,
+`resident_id`, `disk_id` speak `Term_ID`. The sentinels are typed
+(`MATCH_DEFAULT_GRAPH`, `CONSUMER_ID_FIRST/LAST`: `Term_ID`; `LIVE_EPOCH`:
+`Epoch`); `RES_INLINE_FLAG/PAYLOAD_MASK/BIAS` became *untyped* constants so
+they describe the representation whether applied to a `Term_ID` or a raw
+`u32`. Counts stay `u32` (`n_facts`, `n_terms`, `n_epochs`,
+`snapshot_terms`), and the conversions are where the meaning changes: an id
+against its table's size, the chunk shift-and-mask, the inline-bit
+constructions, `disk_id`/`resident_id`'s widening. The on-disk format and
+the segment/fact-count fields in `encode.odin`/`open.odin` are untouched.
+
+**Verified internally**: the compiler enumerated the sites (two library
+errors after the first mechanical pass — `Loader.seen`'s value type and an
+epoch-against-count compare in `apply` — the rest in tests); `make check`
+and `make test` green: 72 record tests, ingest, tool, proof (the Python
+verifier unchanged), readme, scale. An audit of the remaining `u32`s in the
+library finds only counts, the radix sort's running total, format fields
+and prose. One place the types bit on purpose: the term-index torture test
+numbers terms, facts and epochs in lockstep and compared them across
+spaces; it now converts explicitly and says why. `apply`'s `Plan_Op` gained
+a separate `pending: int` beside `target: Fact_ID`, where before a pending
+assert's index was smuggled through the fact-id field — the one spot in
+the store's own code where two spaces had been sharing a variable.
+
+**Docs**: `api.md` §3 and §12 amended (the pseudocode keeps its spelling;
+`ids.odin` is the authority); README's width paragraph gained the three
+types; RECORD-I-0003's handoff and the vision amended with dated notes.
+Consumers: odin-rdf-shacl pins `v0.3.0` next and adapts `Session.graph`,
+`Focus_Node.id`, the `Bindings` arrays and `Validator`'s `check`;
+odin-rdf-sparql starts typed.
