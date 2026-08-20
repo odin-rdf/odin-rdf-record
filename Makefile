@@ -5,15 +5,19 @@
 # the compiler does.
 COLL := -collection:rdf=../odin-rdf-parser
 
-# Every package with tests. Grows with the implementation; tests/readme joins
-# it when the README carries its first example. tests/tool drives the built
-# binary, so the test target depends on tool; tests/proof runs the Python
-# verifier (tests/verify/rdflog_verify.py) against the fault corpus, so the
-# test target requires python3 and says so rather than failing cryptically.
-# tests/scale is separate below: it is the measurement suite, gating the
-# vision's sub-second boot criterion, and runs optimized — a debug harness
-# would measure the harness, not the store.
-PKGS := record tests/tool tests/proof
+# Every package with tests. record/ingest is the opt-in subpackage that
+# turns parsed documents into ops (RECORD-I-0003 decision 7); tests/ingest
+# sweeps it over the parser repo's vendored W3C suites, reached through the
+# sibling checkout, and drives the dump round trip, so like tests/tool it
+# needs the built binary. tests/readme compiles the README's example.
+# tests/tool drives the built binary, so the test target depends on tool;
+# tests/proof and tests/ingest run the Python verifier
+# (tests/verify/rdflog_verify.py), so the test target requires python3 and
+# says so rather than failing cryptically. tests/scale is separate below: it
+# is the measurement suite, gating the vision's sub-second boot criterion,
+# and runs optimized — a debug harness would measure the harness, not the
+# store.
+PKGS := record record/ingest tests/tool tests/proof tests/ingest tests/readme
 
 # There is no Term_ID width matrix here, deliberately. The family's dual-width
 # convention exists because odin-rdf-store makes ID width a build-time choice

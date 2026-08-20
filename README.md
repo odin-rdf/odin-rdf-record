@@ -94,11 +94,34 @@ consuming it is future work tracked on their side.
 ## Layout
 
 ```
-record/       the package: log, replay, resident store, snapshot API
-tool/         the record CLI: verify, dump, head — the auditor's read surface
-doc/design/   the founding documents (the spec; see doc/design/README.md)
-.metis/       vision, ADRs, initiatives — the why behind the contracts
+record/         the package: log, replay, resident store, snapshot API, apply
+record/ingest/  opt-in: parsed Turtle/N-Triples/TriG/N-Quads documents → []Op
+tool/           the record CLI: verify, dump, head — the auditor's read surface
+doc/design/     the founding documents (the spec; see doc/design/README.md)
+.metis/         vision, ADRs, initiatives — the why behind the contracts
 ```
+
+## Example
+
+Open a store, turn a document into ops, commit them as one epoch
+(compiled and asserted in [`tests/readme`](tests/readme)):
+
+```odin
+fs: rec.Mem_FS // tests and scratch; rec.posix_file_ops() for a directory on disk
+s: rec.Store
+_, err, _, _ := rec.store_open(&s, "store", rec.mem_file_ops(&fs))
+ops, ierr := ingest.turtle(transmute([]byte)string(SOURCE), nil, context.allocator, blank_prefix = "upload-1/")
+epoch, _, aerr := rec.apply(&s, {ops = ops, actor = rdf.IRI("http://example.org/alice")})
+ingest.ops_destroy(ops, context.allocator)
+rec.store_close(&s)
+```
+
+`record/ingest` is a subpackage so that the core links no parser unless a
+consumer asks for one; `blank_prefix` scopes a document's blank-node labels
+(decision 4 of RECORD-I-0003: labels are interned as given, so scoping is
+the loader's job and the prefix makes them predictable for a later
+retract). The ops own their terms — the parser's validity contract does not
+allow borrowing past a statement — and `apply` copies what it interns.
 
 ## Commands
 
