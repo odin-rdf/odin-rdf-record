@@ -72,6 +72,24 @@ odin-rdf-shacl and odin-rdf-sparql target odin-rdf-store today and are
 unaffected; their adoption of this repository's snapshot API is tracked on
 their side, once that API is real.
 
+> **Amended 2026-08-20 (RECORD-I-0001, I-0002, I-0003 complete).** The
+> paragraphs above stand as the record of the founding day. Since then: the
+> log of record is real (format v1, frozen, verified by an independent Python
+> implementation on every test run); the resident store boots from it in
+> 205–278 ms at ISMS scale and serves epoch-pinned reads through the §12 API;
+> and the write path is real — `apply` as the one entrance, `log.md` §5.3's
+> preconditions as typed caller errors, resident mutation before the fsync
+> in state no reader can observe with exact rollback, a `Validator` seam at
+> `store_open` receiving the post-state as an ordinary snapshot, the
+> `record/ingest` subpackage, an in-memory `File_Ops`. One commit at 4×10⁵
+> facts costs 31–35 ms on the memory seam; the footprint is 21.2 MB. The
+> "second store beside odin-rdf-store" stance is superseded: on 2026-08-20
+> the family decided to move odin-rdf-shacl and then odin-rdf-sparql onto
+> this repository and retire odin-rdf-store, the siblings adapting to this
+> store and not the reverse. Their port initiatives live on their side; what
+> they need from here is listed in RECORD-I-0003's Status. Publication of
+> the repository and its first tag are the owner's.
+
 ## Future State
 
 An embedded store where:

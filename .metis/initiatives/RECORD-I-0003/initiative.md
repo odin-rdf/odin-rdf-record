@@ -4,17 +4,17 @@ level: initiative
 title: "Apply: the write path, and the seam the sibling ports bind"
 short_code: "RECORD-I-0003"
 created_at: 2026-08-20T11:04:11.758988+00:00
-updated_at: 2026-08-20T12:02:01.854639+00:00
+updated_at: 2026-08-20T17:30:00.000000+00:00
 parent: RECORD-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/active"
+  - "#phase/completed"
 
 
-exit_criteria_met: false
+exit_criteria_met: true
 estimated_complexity: M
 initiative_id: apply-the-write-path-and-the-seam
 ---
@@ -572,6 +572,117 @@ wired validator the post-state before any byte is durable, and whose
 apply-written log verifies under both verifiers and replays to the same
 projection — at which point the odin-rdf-shacl port initiative (on its
 side) is unblocked, and the odin-rdf-sparql port after it.
+## Status — 2026-08-20: all six tasks complete; the numbers, what the siblings need, their handoff
+
+Drafted, decided at the design gate, decomposed and implemented in one
+day. T-0013 (the encoder and intern, numbering proven through the real
+writer), T-0014 (the term index and the acquire mutex; the set's list
+copies, a divergence from `api.md` §13.8 discovered and closed; a
+three-way string quicksort after a 56 ms comparison-sort measurement —
+7 ms), T-0015 (`apply`, the memory `File_Ops`, the writer inside the
+store, rollback exact by comparison, the crash sweep, replay equivalence
+on both seams), T-0016 (the `Validator` as built; decision 5 tested by
+replay), T-0017 (`record/ingest` over the W3C suites by reference; the
+ops own their terms, a `base` for Turtle/TriG — both forced by the
+parser's contract), T-0018 (below). 72 record tests, 7 ingest, 2 proof,
+8 scale, the tool and the README example green; `make check` green.
+
+**The numbers (optimized build, Apple Silicon dev machine, memory seam —
+the production seam adds the disk's fsync per commit):**
+
+| | measured |
+|---|---|
+| one commit, 1–2 ops, at 4×10⁵ facts / 5×10⁴ terms | **31–35 ms** (means over two runs; min 30.5, max 36.2, 24 commits each) |
+| — of which the six-permutation rebuild (`RECORD-A-0005` flat copy-on-write) | ~all; term-index merge, list copies, encode are the remainder |
+| transient allocation per commit | up to 18.6 MB |
+| bulk load: the ISMS corpus as one changeset (4×10⁵ ops) | **222–267 ms**, one epoch, 14.7 MB of log |
+| resident after the bulk load | **21.2 MB** (facts 9.2, permutations 9.2, arena 2.0, term index + offsets 0.39) |
+| resident booted from the generator's logs (T-0012's shapes) | **20.0 / 23.0 MB**, from 22.9 / 25.9 before T-0014 (−2.9 MB) |
+| boot from those logs | 205 / 272–278 ms (term index 7 ms of it) |
+| replay equivalence, crash sweep, both verifiers over apply-written logs | green on every `make test` |
+
+`RECORD-A-0005`'s review trigger, re-read against 31–35 ms: it does not
+fire; the delta structure stays deferred (annotated in the ADR). The
+hand-edited shape was not run as 2×10⁵ commits — at ~33 ms each that is
+nearly two hours, and the number wanted is per commit, not per corpus;
+the measurement is 24 commits after the bulk load, each timed.
+
+**What the siblings' CI needs from a published repository (the owner's
+to do; listed here, not done here):**
+
+- A repository under the organization and a tag to pin — the family
+  pins consumers to tags (`odin-rdf-store@v0.6.0`, `odin-rdf-parser@v0.1.0`
+  today), so `odin-rdf-record@v0.1.0` is the shape; CI checks it out
+  beside the consumer as `../odin-rdf-record`.
+- `-collection:record=../odin-rdf-record` in each consumer's `Makefile`
+  and the same entry in its `ols.json`; a consumer must also keep
+  `rdf:` declared, since this repository's sources import it (the
+  family's collections-resolve-in-the-importer rule).
+- **POSIX only**: there is no Windows `File_Ops`. A consumer's Windows CI
+  leg either supplies its own `File_Ops` or — for test suites — uses
+  `mem_file_ops`, which is platform-free; the posix file is
+  `#+build linux, darwin`, so a Windows build of `record` compiles
+  without it and `store_open` works over `Mem_FS`.
+- `make test` here needs `python3` (the cross-implementation verifier);
+  the library does not.
+
+**Handoff for the sibling port initiatives (on their side; the survey
+of 2026-08-20 condensed, with what this initiative added):**
+
+1. *The read-API mapping.* `store_latest`/`store_at` for the
+   transaction (a snapshot is a value: acquire, use, release);
+   `snapshot_match` + `range_iter` + `scan_next` for `match` — the
+   pattern is four `u32`s, 0 unbound, `MATCH_DEFAULT_GRAPH` for the
+   default graph in G, `Filter{origin = .Any}` for what the store
+   recorded (origin must be stated); `snapshot_resolve` for `find_term`;
+   `snapshot_term` / `snapshot_bytes` for `lookup_term`;
+   `snapshot_exists` for the existence probes; `snapshot_kind` for
+   `store.id_kind` (eleven call sites in sparql, eight in shacl) — IRI,
+   Blank, Literal, never the tag byte; `snapshot_epoch_meta` for the
+   transaction's who/when/why.
+2. *The 64-bit widening rule.* The engines keep their 64-bit `Term_ID`;
+   this store's ids are `u32` and are widened at the seam, so everything
+   above 2³² is the engine's today. Phase 2 retires the `store:store`
+   vocabulary, and then the engine's own values go in
+   `CONSUMER_ID_FIRST ..= CONSUMER_ID_LAST` (`0x8000_0001 ..=
+   0x8FFF_FFFF`) — `api.md` §3, amended.
+3. *The write side.* `apply(s, Changeset{ops, actor, reason, mode})`;
+   `Op{kind, using quad: rdf.Quad}` — the parser's quad, so a harness
+   builds ops with a struct literal or through `ingest.turtle` and its
+   siblings. `load_turtle(ds, src, graph)` becomes `ingest.turtle(src,
+   graph, allocator, blank_prefix = <test name>)` + `apply` +
+   `ops_destroy`; `blank_prefix` is the `Load_Scope`. The ops own their
+   terms; `base` resolves relative IRIs.
+4. *The Validator shacl binds.* `Validator{check: proc(data, candidate:
+   Snapshot, ops: []Resident_Op, allocator) -> bool, data}` on
+   `store_open`; `session_init_txn` becomes a `check` over the
+   candidate — the post-state through the ordinary read API, the
+   pre-state a `store_latest` away; `Enforce` refuses before a byte is
+   written, `Record` commits and reports; the log does not record the
+   verdict (decision 5) — a report that must be durable is facts.
+5. *The memory `File_Ops` for the suites.* `Mem_FS` + `mem_file_ops`
+   replaces `open_ephemeral`: ~300 call sites in shacl, ~170 in sparql,
+   almost all open + load + close. `store_close` releases both halves.
+6. *The triple-term limit sparql must record.* The frozen format has no
+   tag for triple terms or base direction; `apply` refuses them with
+   `.Unsupported_Term` at the op. 20 of sparql's vendored data files
+   use `<<…>>` — a recorded backend limit on sparql's side, not a
+   format-version decision taken for a test corpus.
+7. *Two things the survey did not know.* The read path's safety under a
+   live writer rests on the set's list copies (every list a reader
+   indexes is the published set's, never the store's) and on
+   `Fact.retract` being the one field loaded atomically; and a
+   `Snapshot` handed to a `Validator` carries no reference of its own
+   and must not be retained.
+
+**Exit criteria: met.** `make test` green; a store that accepts
+changesets through one entrance, refuses what `log.md` §5.3 forbids with
+a typed error naming the op, gives a wired validator the post-state
+before any byte is durable, and whose apply-written log verifies under
+both verifiers and replays to the same projection. The odin-rdf-shacl
+port initiative is unblocked on its side, and the odin-rdf-sparql port
+after it; publication and the first tag are the owner's.
+
 ## Session handoff — 2026-08-20, before implementation begins
 
 Written at the end of the session that drafted this initiative, for the

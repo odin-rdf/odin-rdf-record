@@ -624,14 +624,105 @@ test_scale_hand_edited :: proc(t: ^testing.T) {
 	measure(t, "hand-edited", "build/scale/edited", 200_000)
 }
 
-// --- the bulk load through apply (RECORD-T-0015) ------------------------
+// --- the write path at scale (RECORD-T-0015, RECORD-T-0018) --------------
 
-// test_scale_bulk_apply loads an ISMS-scale corpus as ONE changeset —
-// one epoch, one fsync, the shape log.md par. 7.1 gives bulk import —
-// through apply on the in-memory file seam: OPS_TOTAL asserts over
-// ~10^5 distinct terms of every shape, the quads kept a set by the
-// generator so no precondition fires. Timed for T-0018's record; gated
-// only on succeeding in one epoch with every op a fact.
+// Bulk is an ISMS-scale corpus in RDF terms: OPS_TOTAL distinct quads
+// over ~5×10⁴ terms of every shape — the apply-side twin of gen_store's
+// encoded corpus — with its vocabulary kept so small changesets can be
+// drawn from it afterwards.
+@(private = "file")
+Bulk :: struct {
+	owned:    [dynamic]string,
+	subjects: []rdf.Term,
+	preds:    []rdf.Term,
+	objects:  []rdf.Term,
+	graphs:   []rdf.Graph_Label,
+	ops:      [dynamic]rec.Op,
+	rng:      u64,
+}
+
+@(private = "file")
+bulk_make :: proc() -> (b: Bulk) {
+	own :: proc(owned: ^[dynamic]string, str: string) -> string {
+		append(owned, str)
+		return str
+	}
+	Key :: struct {
+		s, p, o, g: u32,
+	}
+	N_SUBJECTS :: 10_000
+	N_GRAPHS :: 500
+	N_OBJECTS :: 60_000
+	b.rng = SEED
+	b.subjects = make([]rdf.Term, N_SUBJECTS)
+	for &sub, i in b.subjects {
+		sub = rdf.IRI(own(&b.owned, fmt.aprintf("http://example.org/isms/asset/%06d", i)))
+	}
+	b.preds = make([]rdf.Term, 40)
+	for &pr, i in b.preds {
+		pr = rdf.IRI(own(&b.owned, fmt.aprintf("http://example.org/isms/vocab/p%02d", i)))
+	}
+	b.graphs = make([]rdf.Graph_Label, N_GRAPHS)
+	for &g, i in b.graphs {
+		if i > 0 {
+			g = rdf.IRI(own(&b.owned, fmt.aprintf("http://example.org/isms/graph/%04d", i)))
+		}
+	}
+	b.objects = make([]rdf.Term, N_OBJECTS)
+	for &o, i in b.objects {
+		switch i % 6 {
+		case 0:
+			o = rdf.IRI(own(&b.owned, fmt.aprintf("http://example.org/isms/control/%06d", i)))
+		case 1:
+			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("annual review of the asset register %d", i)), datatype = rdf.XSD_STRING}
+		case 2:
+			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("Control objective %d", i)), datatype = rdf.RDF_LANG_STRING, language = "en"}
+		case 3:
+			// Twelve 28-day months: distinct per i, and always a valid date.
+			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("%04d-%02d-%02d", 2000 + i/336, 1 + (i%336)/28, 1 + i%28)), datatype = rec.XSD_DATE}
+		case 4:
+			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("%d", i*13)), datatype = rdf.XSD_INTEGER}
+		case 5:
+			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("%d.%02d", i, i%100)), datatype = "http://www.w3.org/2001/XMLSchema#decimal"}
+		}
+	}
+	seen := make(map[Key]bool)
+	defer delete(seen)
+	b.ops = make([dynamic]rec.Op, 0, OPS_TOTAL)
+	for len(b.ops) < OPS_TOTAL {
+		k := Key{
+			u32(splitmix(&b.rng) % N_SUBJECTS),
+			u32(splitmix(&b.rng) % 40),
+			u32(splitmix(&b.rng) % N_OBJECTS),
+			u32(splitmix(&b.rng) % N_GRAPHS) if splitmix(&b.rng)%100 < 30 else 0,
+		}
+		if k in seen {
+			continue
+		}
+		seen[k] = true
+		append(&b.ops, rec.Op{kind = .Assert, quad = {triple = {b.subjects[k.s], b.preds[k.p], b.objects[k.o]}, graph = b.graphs[k.g]}})
+	}
+	return
+}
+
+@(private = "file")
+bulk_destroy :: proc(b: ^Bulk) {
+	for str in b.owned {
+		delete(str)
+	}
+	delete(b.owned)
+	delete(b.subjects)
+	delete(b.preds)
+	delete(b.objects)
+	delete(b.graphs)
+	delete(b.ops)
+	b^ = {}
+}
+
+// test_scale_bulk_apply loads the corpus as ONE changeset — one epoch,
+// one fsync, the shape log.md par. 7.1 gives bulk import — through
+// apply on the in-memory file seam. Timed for the record; gated only on
+// succeeding in one epoch with every op a fact.
 @(test)
 test_scale_bulk_apply :: proc(t: ^testing.T) {
 	fs: rec.Mem_FS
@@ -642,82 +733,11 @@ test_scale_bulk_apply :: proc(t: ^testing.T) {
 	testing.expect_value(t, lerr, rec.Load_Error.None)
 	testing.expect_value(t, werr, rec.Writer_Error.None)
 	defer rec.store_close(&s)
-
-	Key :: struct {
-		s, p, o, g: u32,
-	}
-	rng := SEED
-	owned := make([dynamic]string)
-	defer {
-		for str in owned {
-			delete(str)
-		}
-		delete(owned)
-	}
-	own :: proc(owned: ^[dynamic]string, str: string) -> string {
-		append(owned, str)
-		return str
-	}
-	N_SUBJECTS :: 10_000
-	N_GRAPHS :: 500
-	N_OBJECTS :: 60_000
-	subjects := make([]rdf.Term, N_SUBJECTS)
-	defer delete(subjects)
-	for &sub, i in subjects {
-		sub = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/asset/%06d", i)))
-	}
-	preds := make([]rdf.Term, 40)
-	defer delete(preds)
-	for &pr, i in preds {
-		pr = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/vocab/p%02d", i)))
-	}
-	graphs := make([]rdf.Graph_Label, N_GRAPHS)
-	defer delete(graphs)
-	for &g, i in graphs {
-		if i > 0 {
-			g = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/graph/%04d", i)))
-		}
-	}
-	objects := make([]rdf.Term, N_OBJECTS)
-	defer delete(objects)
-	for &o, i in objects {
-		switch i % 6 {
-		case 0:
-			o = rdf.IRI(own(&owned, fmt.aprintf("http://example.org/isms/control/%06d", i)))
-		case 1:
-			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("annual review of the asset register %d", i)), datatype = rdf.XSD_STRING}
-		case 2:
-			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("Control objective %d", i)), datatype = rdf.RDF_LANG_STRING, language = "en"}
-		case 3:
-			// Twelve 28-day months: distinct per i, and always a valid date.
-			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("%04d-%02d-%02d", 2000 + i/336, 1 + (i%336)/28, 1 + i%28)), datatype = rec.XSD_DATE}
-		case 4:
-			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("%d", i*13)), datatype = rdf.XSD_INTEGER}
-		case 5:
-			o = rdf.Literal{lexical = own(&owned, fmt.aprintf("%d.%02d", i, i%100)), datatype = "http://www.w3.org/2001/XMLSchema#decimal"}
-		}
-	}
-
-	seen := make(map[Key]bool)
-	defer delete(seen)
-	ops := make([dynamic]rec.Op, 0, OPS_TOTAL)
-	defer delete(ops)
-	for len(ops) < OPS_TOTAL {
-		k := Key{
-			u32(splitmix(&rng) % N_SUBJECTS),
-			u32(splitmix(&rng) % 40),
-			u32(splitmix(&rng) % N_OBJECTS),
-			u32(splitmix(&rng) % N_GRAPHS) if splitmix(&rng)%100 < 30 else 0,
-		}
-		if k in seen {
-			continue
-		}
-		seen[k] = true
-		append(&ops, rec.Op{kind = .Assert, quad = {triple = {subjects[k.s], preds[k.p], objects[k.o]}, graph = graphs[k.g]}})
-	}
+	b := bulk_make()
+	defer bulk_destroy(&b)
 
 	start := time.tick_now()
-	epoch, _, aerr := rec.apply(&s, {ops = ops[:], actor = rdf.IRI("http://example.org/isms/importer")})
+	epoch, _, aerr := rec.apply(&s, {ops = b.ops[:], actor = rdf.IRI("http://example.org/isms/importer")})
 	apply_ms := time.duration_milliseconds(time.tick_since(start))
 	testing.expect_value(t, aerr, rec.Apply_Error{})
 	testing.expect_value(t, epoch, u32(1))
@@ -729,4 +749,85 @@ test_scale_bulk_apply :: proc(t: ^testing.T) {
 	}
 	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
 	log.infof("bulk apply: %d ops, %d terms, %.1f MB log — one epoch in %.0f ms", OPS_TOTAL, len(s.dict.off), mb(bytes), apply_ms)
+}
+
+// test_scale_commit_latency is RECORD-T-0018's number: the cost of one
+// human-paced commit at ISMS scale — the bulk corpus loaded first, then
+// small changesets (an assert and a retract each) applied one at a
+// time on the memory seam, each timed. Per commit the store pays the
+// intern and the preconditions (microseconds), the six-permutation
+// rebuild over 4×10⁵ facts (RECORD-A-0005's flat copy-on-write — the
+// 45–57 ms baseline), the term-index merge, the set's list copies, and
+// the encode; no fsync, which on the production seam adds the disk's
+// own figure. The resident footprint is taken after the bulk load with
+// a tracking allocator as the store's (true bytes, as T-0012 did), and
+// the allocator's peak over the commits is the transient cost of one
+// rebuild. Not run as 2×10⁵ commits: at ~50 ms each that is hours, and
+// the number is per commit, not per corpus.
+@(test)
+test_scale_commit_latency :: proc(t: ^testing.T) {
+	track: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&track, context.allocator)
+	defer mem.tracking_allocator_destroy(&track)
+	alloc := mem.tracking_allocator(&track)
+
+	fs: rec.Mem_FS
+	defer rec.mem_fs_destroy(&fs)
+	s: rec.Store
+	_, err, _, _ := rec.store_open(&s, "latency", rec.mem_file_ops(&fs), allocator = alloc)
+	testing.expect_value(t, err, rec.Open_Error.None)
+	defer rec.store_close(&s)
+	b := bulk_make()
+	defer bulk_destroy(&b)
+	_, _, aerr := rec.apply(&s, {ops = b.ops[:]})
+	testing.expect_value(t, aerr, rec.Apply_Error{})
+	resident := int(track.current_memory_allocated)
+	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
+	set_b := len(s.idx.terms)*size_of(u32) + len(s.idx.off)*size_of(u32)
+	perm_b := 0
+	for o in rec.Order {
+		perm_b += len(s.idx.ord[o]) * size_of(u32)
+	}
+	arena_b := 0
+	for c in s.dict.chunks {
+		arena_b += len(c)
+	}
+	log.infof(
+		"after bulk apply: resident %.1f MB (facts %.1f, permutations %.1f, arena %.1f, term index+offsets %.2f) at %d facts, %d terms",
+		mb(resident), mb(len(s.facts)*rec.FACT_CHUNK_SIZE*size_of(rec.Fact)), mb(perm_b), mb(arena_b), mb(set_b), s.n_facts, len(s.dict.off),
+	)
+
+	// The commits: each retracts the quad the previous one asserted and
+	// asserts a fresh one, so the live set stays the corpus ± 1.
+	N :: 24
+	track.peak_memory_allocated = track.current_memory_allocated
+	base := resident
+	times: [N]f64
+	prev: rec.Op
+	for i in 0 ..< N {
+		ops: [2]rec.Op
+		n := 0
+		if i > 0 {
+			ops[n] = prev
+			ops[n].kind = .Retract
+			n += 1
+		}
+		ops[n] = rec.Op{kind = .Assert, quad = {triple = {b.subjects[i], b.preds[0], rdf.Literal{lexical = fmt.tprintf("commit %d", i), datatype = rdf.XSD_STRING}}, graph = nil}}
+		prev = ops[n]
+		n += 1
+		start := time.tick_now()
+		e, _, cerr := rec.apply(&s, {ops = ops[:n], actor = rdf.IRI("http://example.org/isms/editor")})
+		times[i] = time.duration_milliseconds(time.tick_since(start))
+		testing.expect_value(t, cerr, rec.Apply_Error{})
+		testing.expect_value(t, e, u32(i+2))
+	}
+	lo, hi, sum := times[0], times[0], 0.0
+	for x in times {
+		lo = min(lo, x)
+		hi = max(hi, x)
+		sum += x
+	}
+	peak := int(track.peak_memory_allocated) - base
+	log.infof("commit latency at %d facts, %d commits of 1–2 ops on the memory seam: min %.1f ms, mean %.1f ms, max %.1f ms; transient per commit up to %.1f MB over the %.1f MB resident", s.n_facts, N, lo, sum/N, hi, mb(peak), mb(resident))
+	testing.expect(t, hi < 1000, "a commit stays well inside a second")
 }

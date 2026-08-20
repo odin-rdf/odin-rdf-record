@@ -250,6 +250,21 @@ inline flag set, tag zero, zero payload — decodes as invalid rather than as a
 plausible term. It is the cheapest available check that a `u32` being treated as
 an ID actually is one.
 
+> **Amended 2026-08-20 (RECORD-I-0003 decision 10, RECORD-T-0018).** The rest
+> of tag `0` — `0x8000_0001 ..= 0x8FFF_FFFF`, inline flag set, tag zero, nonzero
+> payload — can therefore never name a term either, and is *stated* as the
+> consumer range: ids a query or validation engine may give its own computed
+> values (bound variables, aggregates, sentinels) inside its own rows, certain
+> never to collide with a dictionary id or an inlined one. `record` names it
+> (`CONSUMER_ID_FIRST`, `CONSUMER_ID_LAST`) and does nothing else with it: no
+> procedure accepts such an id and no check for one exists — the store never
+> sees them. `0x8000_0000` itself, the value below the range, is
+> `MATCH_DEFAULT_GRAPH` (§12.2's amendment), the one reserved pattern the store
+> does use. Stating the range forecloses nothing, since tag `0` is frozen
+> invalid by `RECORD-A-0001`. It exists because the sibling ports' second phase
+> retires their 64-bit `store:store` vocabulary, after which the engines need
+> this store to say which `u32` values are theirs.
+
 **Why the type must live in the ID at all**, since it is a recurring question: an
 inlined term has no dictionary entry, so the ID is the term's entire
 representation and must be self-describing. Bit 31 alone says "no dictionary entry

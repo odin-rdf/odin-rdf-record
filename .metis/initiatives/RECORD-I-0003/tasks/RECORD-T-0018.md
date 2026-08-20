@@ -4,7 +4,7 @@ level: task
 title: "Measurement and the record: commit latency, footprint, the id range, the amendments"
 short_code: "RECORD-T-0018"
 created_at: 2026-08-20T11:47:13.417008+00:00
-updated_at: 2026-08-20T11:47:13.417008+00:00
+updated_at: 2026-08-20T17:30:00.000000+00:00
 parent: RECORD-I-0003
 blocked_by:
   - "RECORD-T-0014"
@@ -15,10 +15,10 @@ archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
-exit_criteria_met: false
+exit_criteria_met: true
 initiative_id: RECORD-I-0003
 ---
 
@@ -40,23 +40,23 @@ replacement" paragraphs, which stand with a dated note.
 
 ## Acceptance Criteria
 
-- [ ] `tests/scale` gains an `apply` path: the ISMS corpus committed
+- [x] `tests/scale` gains an `apply` path: the ISMS corpus committed
       through `apply` in both §9 shapes (bulk: one epoch of 4×10⁵ ops;
       hand-edited: 2×10⁵ small changesets on `mem_ops`), measuring per-
       commit latency at 3.4×10⁵ facts (the rebuild baseline is 45–57 ms;
       the term-index merge is new) and the resident footprint after
       T-0014 removed `by_term`. Numbers recorded in the initiative's
       Status section, as I-0002 did.
-- [ ] `RECORD-A-0005`'s review trigger ("measured commit latency") is
+- [x] `RECORD-A-0005`'s review trigger ("measured commit latency") is
       re-read against the number and the ADR annotated: the delta
       structure stays deferred, or a follow-on is filed — a sentence
       either way.
-- [ ] `api.md` §3 states the consumer id range — inline flag set, tag 0,
+- [x] `api.md` §3 states the consumer id range — inline flag set, tag 0,
       `0x8000_0001 ..= 0x8FFF_FFFF` — as ids that can never name a term
       and are available to consumers' own rows; a named constant in
       `record` (`CONSUMER_ID_FIRST`, or the range as a pair) with a doc
       comment saying the store never sees these ids. No runtime check.
-- [ ] The release walk (family CLAUDE.md convention): README's Status
+- [x] The release walk (family CLAUDE.md convention): README's Status
       section says the store accepts changesets through `apply`, has a
       validator seam, an `ingest` subpackage and a memory `File_Ops`,
       and states what the log does not record (decision 5);
@@ -66,17 +66,17 @@ replacement" paragraphs, which stand with a dated note.
       siblings here; the family `CLAUDE.md`'s record section and its
       "not a replacement" sentences amended the same way, old text
       standing with the dated note.
-- [ ] A short list, in the initiative's Status section, of what the
+- [x] A short list, in the initiative's Status section, of what the
       siblings' CI needs from a published repository: a tag to pin
       (`checkout@vX`), `-collection:record=../odin-rdf-record` in their
       Makefiles and `ols.json`, and the POSIX-only note for their
       Windows leg. Publication and tagging themselves are the owner's.
-- [ ] A handoff section for the sibling port initiatives (on their
+- [x] A handoff section for the sibling port initiatives (on their
       side): the read-API mapping the survey found, the 64-bit widening
       rule, `snapshot_kind` and `snapshot_exists`, the `Validator`
       shape shacl binds, the memory `File_Ops` for their suites, and
       the triple-term limit sparql must record.
-- [ ] `make check` and `make test` green; the initiative's exit
+- [x] `make check` and `make test` green; the initiative's exit
       criteria checked off and the initiative completed.
 
 ## Implementation Notes
@@ -91,3 +91,32 @@ an hour (the standing note).
 ### Dependencies
 
 Everything before it: RECORD-T-0014 through RECORD-T-0017.
+
+## Implementation record — 2026-08-20
+
+- **Measurement** (`tests/scale`, `test_scale_commit_latency` beside
+  `test_scale_bulk_apply`, both over a shared `Bulk` corpus generator in
+  RDF terms): commit latency at 4×10⁵ facts **31–35 ms** (means over two runs;
+  min 30.5, max 36.2; 24 commits of 1–2 ops each, memory seam), transient up
+  to 18.6 MB per commit, resident **21.2 MB** after the bulk load (facts
+  9.2, permutations 9.2, arena 2.0, term index + offsets 0.39); bulk load
+  222–267 ms. The hand-edited shape is 24 timed commits after the bulk
+  load, not 2×10⁵ commits (nearly two hours at ~33 ms each); the criterion
+  asked for the per-commit number at that fact count, which this is.
+  Recorded in the initiative's Status, as I-0002 did.
+- **`RECORD-A-0005`'s trigger** annotated: does not fire at 31–35 ms; the
+  delta structure stays deferred; the conditions that would fire it
+  stated.
+- **The consumer range**: `CONSUMER_ID_FIRST`/`CONSUMER_ID_LAST` in
+  `resident.odin` beside the inline constants, `api.md` §3 amended. No
+  runtime, no check.
+- **The release walk**: README Status heading and a dated paragraph (the
+  write path, the validator seam, ingest, the memory seam, what the log
+  does not record, the numbers) and a dated note over "Position in the
+  family"; `.metis/vision.md` Current State amended; the family
+  `CLAUDE.md`'s diagram, record heading, "second store beside" sentence
+  and "Next" paragraph amended — old text standing, dated notes beside.
+- **The CI list and the sibling handoff** are in the initiative's Status.
+- One observation for the parser repository carried over from T-0017: a
+  negative `column` on unterminated long strings.
+

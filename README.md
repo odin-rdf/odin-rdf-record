@@ -21,7 +21,7 @@ buys, in order of why the repository exists:
 - **Epoch-pinned reads.** A snapshot is a value, not a lock or a transaction;
   any historical epoch is readable at any time, at no retention cost.
 
-## Status: the store boots — log, resident projection, and read API
+## Status: the store boots and accepts changesets — log, projection, read API, `apply`
 
 The log layer is real (RECORD-I-0001, 2026-08-19): the encoding layer with
 golden vectors computed independently of the code, the single-writer append
@@ -71,7 +71,34 @@ both inherit ([`architecture.md`](doc/design/architecture.md)).
 `.metis/adrs/` record the decisions frozen at first write — the format
 holds real bytes, so they are no longer revisable.
 
+The write path is real (RECORD-I-0003, 2026-08-20): `apply` is the one
+entrance — a changeset of asserts and retracts in RDF terms, refused with a
+typed error naming the op where `log.md` §5.3 forbids it, applied to
+writer-private state before the fsync and rolled back exactly on failure,
+then appended, fsynced, published; a `Validator` seam wired at `store_open`
+that sees the post-state as an ordinary snapshot before a byte is durable;
+`record/ingest` for Turtle, N-Triples, TriG and N-Quads; an in-memory
+`File_Ops` for tests and scratch; and a read path proven safe under a live
+writer (the acquire mutex, the published term index). What the log does
+**not** record: that a validator objected under `Record` mode — the
+verdict is returned, not written. Measured (optimized, Apple Silicon dev
+machine, memory seam): **one commit of one or two ops at 4×10⁵ facts costs
+31–35 ms** (means over two runs; min 30.5, max 36.2, 24 commits each), the six-permutation
+rebuild of `RECORD-A-0005`'s flat copy-on-write being nearly all of it;
+the ISMS corpus as one changeset commits in 222–267 ms; resident footprint
+**21.2 MB** at 4×10⁵ facts and 5×10⁴ terms (20.0 / 23.0 MB booted from the
+generator's logs, down from 22.9 / 25.9 MB once the term map went). On the
+production seam a commit adds the disk's fsync.
+
 ## Position in the family
+
+> **Amended 2026-08-20 (RECORD-I-0003).** The paragraph and table below
+> record the founding stance and stand as written. On 2026-08-20 the family
+> decided to move odin-rdf-shacl and odin-rdf-sparql off odin-rdf-store and
+> onto this repository — shacl first, sparql second — and to retire
+> odin-rdf-store afterwards; the siblings adapt to this store, not the
+> reverse. The comparison remains accurate; "not a replacement" no longer
+> describes the plan.
 
 A second store, beside [odin-rdf-store](https://github.com/odin-rdf/odin-rdf-store),
 not a replacement for it and not a fork of it. The two answer different

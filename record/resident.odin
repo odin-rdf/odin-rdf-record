@@ -37,6 +37,19 @@ RES_INLINE_TAG_SHIFT :: 28
 RES_INLINE_PAYLOAD_MASK :: (u32(1) << 28) - 1
 RES_INLINE_BIAS :: u32(1) << 27
 
+// CONSUMER_ID_FIRST ..= CONSUMER_ID_LAST is the range of u32 values
+// that can never name a term (api.md par. 3, amended; RECORD-I-0003
+// decision 10): inline flag set, tag 0 — the tag RECORD-A-0001 froze
+// as invalid — and a nonzero payload. They are stated for consumers,
+// not used by the store: a query engine may name its own computed
+// values (bound variables, aggregates, sentinels) in this range inside
+// its own rows, certain never to collide with a dictionary or inlined
+// id. The store never sees such an id: no procedure accepts one, no
+// check for one exists, and 0x8000_0000 below the range is
+// MATCH_DEFAULT_GRAPH, the one reserved pattern the store does use.
+CONSUMER_ID_FIRST :: u32(0x8000_0001)
+CONSUMER_ID_LAST :: u32(0x8FFF_FFFF)
+
 // resident_id re-tags one on-disk term id (u64) as a resident id
 // (u32): dictionary ids pass through unchanged, and inlined ids move
 // the flag from bit 63 to bit 31, the tag from bits 62..56 to bits

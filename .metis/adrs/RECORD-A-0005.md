@@ -117,5 +117,15 @@ constants it says must be measured.
 
 - Measured commit latency or allocator pressure from flat copy-on-write —
   the delta structure is the recorded answer, already API-compatible.
+  > **Re-read 2026-08-20 (RECORD-T-0018).** Measured: one commit of one or
+  > two ops at 4×10⁵ facts costs 31–35 ms on the memory seam (means over two
+  > runs; min 30.5, max 36.2, 24 commits each), with up to 18.6 MB of transient
+  > allocation per commit over a 21.2 MB resident — the six-permutation
+  > rebuild and its scaffolding, as this ADR's Neutral consequence priced.
+  > At the premise's human-paced commit rate that is allocator traffic, not
+  > a bound; the trigger does not fire and **the delta structure stays
+  > deferred**. It would fire at sustained rates above ~10 commits/s, or
+  > if a consumer's commit path turned out latency-bound at tens of
+  > milliseconds; neither is on any plan.
 - Any second writer ever being contemplated (it is forbidden by
   `log.md` §10; this ADR's simplicity is part of why).
