@@ -2,6 +2,7 @@ package scale_test
 
 import "core:fmt"
 import "core:log"
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:testing"
@@ -22,9 +23,15 @@ import rec "../../record"
 // File_Ops — an fsync per epoch on a real disk would measure the
 // generator, not the reader — and the finished segments are then
 // written to disk so verify and replay run through the posix ops the
-// production path uses. Only log-level validity is generated: an
-// occasional duplicate assert of a live quad can occur, which the
-// format permits and Apply (a later initiative) refuses.
+// production path uses. The generator honors both write disciplines a
+// real writer will (RECORD-T-0007): it interns (one id per encoding,
+// log.md par. 5.2) and keeps every graph a set (no assert of a live
+// quad, par. 5.3), so the corpus is a valid resident-build substrate.
+//
+// RECORD-T-0012 grows this file into the initiative's exit gate: full
+// boot — store_open end to end — timed against the vision's sub-second
+// criterion, and the resident footprint measured against api.md
+// par. 10's budget, in both epoch shapes.
 
 OPS_TOTAL :: 400_000
 TERMS_TARGET :: 100_000
@@ -534,6 +541,124 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 		}
 		rec.snapshot_release(&snap)
 	}
+}
+
+// measure_boot is RECORD-T-0012's gate: store_open end to end on a
+// generated store, timed and memory-tracked. The first boot writes the
+// startup environment note (the log has none) and is discarded; the
+// measured boot is the steady-state wake — the one api.md par. 8 puts
+// on a user-facing latency path. The store's allocator is a tracking
+// allocator, so resident memory is what the store actually holds and
+// the peak includes the transient replay map and sort scaffolding —
+// measured, not derived. A phase breakdown is timed separately over
+// the same store with the same decomposition store_open runs.
+@(private = "file")
+measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
+	last_epoch, terms, _, live := gen_store(t, dir, epochs, SEED)
+	ops := rec.posix_file_ops()
+
+	// Settle the environment note, so the measured boot is a wake, not
+	// a first run.
+	{
+		s: rec.Store
+		w, _, err, lerr, werr := rec.store_open(&s, dir, ops)
+		testing.expect_value(t, err, rec.Open_Error.None)
+		testing.expect_value(t, lerr, rec.Load_Error.None)
+		testing.expect_value(t, werr, rec.Writer_Error.None)
+		rec.writer_destroy(&w)
+		rec.store_destroy(&s)
+	}
+
+	// The measured boot.
+	track: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&track, context.allocator)
+	defer mem.tracking_allocator_destroy(&track)
+	alloc := mem.tracking_allocator(&track)
+
+	s: rec.Store
+	start := time.tick_now()
+	w, tear, err, lerr, werr := rec.store_open(&s, dir, ops, rec.SEGMENT_TARGET_SIZE, alloc)
+	boot_ms := time.duration_milliseconds(time.tick_since(start))
+	testing.expect_value(t, err, rec.Open_Error.None)
+	testing.expect_value(t, lerr, rec.Load_Error.None)
+	testing.expect_value(t, werr, rec.Writer_Error.None)
+	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
+	testing.expect_value(t, u64(s.published), last_epoch)
+	testing.expect_value(t, u64(len(s.dict.off)), terms)
+
+	// Read-path sanity on the booted store (the full oracle is
+	// test_scale_resident_build's): the head's live count through
+	// Match, against the generator's own live set.
+	snap, serr := rec.store_latest(&s)
+	testing.expect_value(t, serr, rec.Snapshot_Error.None)
+	n_live := 0
+	sc := rec.range_iter(rec.snapshot_match(snap, {}), {origin = .Any})
+	for _ in rec.scan_next(&sc) {
+		n_live += 1
+	}
+	testing.expect_value(t, n_live, live)
+	rec.snapshot_release(&snap)
+
+	// The resident footprint, by structure (bytes actually allocated),
+	// with the by-term map and small slack as the tracker's remainder.
+	fact_b := len(s.facts) * rec.FACT_CHUNK_SIZE * size_of(rec.Fact)
+	perm_b := 0
+	for o in rec.Order {
+		perm_b += len(s.idx.ord[o]) * size_of(u32)
+	}
+	epoch_b := len(s.epochs) * rec.EPOCH_CHUNK_SIZE * size_of(rec.Epoch_Meta)
+	arena_b := 0
+	for c in s.dict.chunks {
+		arena_b += len(c)
+	}
+	off_b := cap(s.dict.off) * size_of(u32)
+	derived_b := cap(s.derived)*size_of(u64) + len(s.idx.derived)*size_of(u64)
+	resident := int(track.current_memory_allocated)
+	peak := int(track.peak_memory_allocated)
+	accounted := fact_b + perm_b + epoch_b + arena_b + off_b + derived_b
+	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
+
+	log.infof(
+		"%s boot: %.0f ms — resident %.1f MB (facts %.1f, permutations %.1f, arena %.1f, epochs %.2f, offsets+origin %.2f, by-term map+rest %.1f), transient peak %.1f MB",
+		name, boot_ms, mb(resident), mb(fact_b), mb(perm_b), mb(arena_b), mb(epoch_b),
+		mb(off_b + derived_b), mb(resident - accounted), mb(peak),
+	)
+	testing.expect(t, boot_ms < 1000, "full boot stays under a second")
+	testing.expect(t, resident > accounted, "the walked structures are within what the tracker saw")
+
+	rec.writer_destroy(&w)
+	rec.store_destroy(&s)
+
+	// The phase breakdown, over the same store: recover + replay-into-
+	// the-build versus the permutation sort — the same decomposition
+	// store_open runs, timed at its two seams.
+	s2: rec.Store
+	rec.store_init(&s2)
+	defer rec.store_destroy(&s2)
+	start = time.tick_now()
+	_, _, rerr := rec.recover(dir, ops)
+	testing.expect_value(t, rerr, rec.Open_Error.None)
+	ld: rec.Loader
+	rec.loader_init(&ld, &s2)
+	_, _, perr := rec.replay(dir, ops, rec.loader_consumer(&ld))
+	testing.expect_value(t, perr, rec.Open_Error.None)
+	rec.loader_destroy(&ld)
+	load_ms := time.duration_milliseconds(time.tick_since(start))
+	start = time.tick_now()
+	rec.store_build_permutations(&s2)
+	sort_ms := time.duration_milliseconds(time.tick_since(start))
+	rec.store_publish(&s2)
+	log.infof("%s boot phases: recover+replay+build %.0f ms, permutation sort %.0f ms", name, load_ms, sort_ms)
+}
+
+@(test)
+test_scale_boot_bulk :: proc(t: ^testing.T) {
+	measure_boot(t, "bulk-loaded", "build/scale/boot-bulk", 1_000)
+}
+
+@(test)
+test_scale_boot_edited :: proc(t: ^testing.T) {
+	measure_boot(t, "hand-edited", "build/scale/boot-edited", 200_000)
 }
 
 @(test)

@@ -21,31 +21,43 @@ buys, in order of why the repository exists:
 - **Epoch-pinned reads.** A snapshot is a value, not a lock or a transaction;
   any historical epoch is readable at any time, at no retention cost.
 
-## Status: the log of record is implemented — format version 1
+## Status: the store boots — log, resident projection, and read API
 
 The log layer is real (RECORD-I-0001, 2026-08-19): the encoding layer with
 golden vectors computed independently of the code, the single-writer append
 path (append → fsync → acknowledge, crash-swept at every operation cut
 point), the open path (full chain verification at every open, torn-tail
 recovery under the position rule), replay through a consumer seam the
-resident store will bind to, and the `record` CLI (`verify`, `dump`,
+resident store binds to, and the `record` CLI (`verify`, `dump`,
 `head`). The proof layer is part of the suite, not a promise: an
 independent Python verifier written from `log.md` alone
 ([`tests/verify/rdflog_verify.py`](tests/verify/rdflog_verify.py)) must
 agree with the Odin implementation verdict for verdict over a shared fault
-corpus on every `make test`, and a synthetic ISMS-shaped log (~4×10⁵ ops,
-~10⁵ terms) is verified and replayed under the vision's sub-second
-criterion — measured at tens to hundreds of milliseconds in both of
-`log.md` §9's epoch shapes.
+corpus on every `make test`.
 
-Not yet built: the memory-resident projection (fact table, dictionary
-arena, permutations), the snapshot API, and `Apply` — the next
-initiatives. The founding documents in [`doc/design/`](doc/design/) remain
-the spec: the on-disk format ([`log.md`](doc/design/log.md)), the resident
-layout and the pattern-matching API ([`api.md`](doc/design/api.md)), and
-the premises both inherit ([`architecture.md`](doc/design/architecture.md)).
+The resident store is real too (RECORD-I-0002, 2026-08-20): `store_open`
+boots end to end — recovery, replay into the pointer-free fact table and
+dictionary arena, the six radix-sorted permutations, one atomic
+publication, and the writer resumed from the verified walk to continue
+the chain (crash-swept across the restart, byte-identical to a writer
+that never stopped). Reads go through refcounted epoch-pinned snapshots:
+`Match` as binary-searched prefix ranges, streaming iteration under
+origin/graph/epoch filters, `Resolve` with the cheap miss, zero-copy
+`Bytes` and codec-backed `Term` — every pattern shape proven against a
+brute-force oracle. Measured on the synthetic ISMS corpus (~4×10⁵ ops,
+~10⁵ terms, optimized build, Apple Silicon dev machine): **full boot
+246 ms bulk-loaded / 325 ms fully hand-edited** against the vision's
+sub-second criterion, resident footprint **22.9 / 25.9 MB** against
+`api.md` §10's ~26–29 MB budget.
+
+Not yet built: `Apply` — the write path with its live-quad preconditions
+and the validation hook — the next initiative. The founding documents in
+[`doc/design/`](doc/design/) remain the spec: the on-disk format
+([`log.md`](doc/design/log.md)), the resident layout and the
+pattern-matching API ([`api.md`](doc/design/api.md)), and the premises
+both inherit ([`architecture.md`](doc/design/architecture.md)).
 `.metis/vision.md` is the strategic source of truth, and the ADRs under
-`.metis/adrs/` record the decisions frozen at first write — the format now
+`.metis/adrs/` record the decisions frozen at first write — the format
 holds real bytes, so they are no longer revisable.
 
 ## Position in the family
@@ -57,7 +69,7 @@ premises and share no contracts:
 |  | odin-rdf-store | odin-rdf-record |
 |---|---|---|
 | durable form | LMDB B+tree, format v2 | append-only hash-chained log |
-| read model | a read transaction *is* the snapshot (`STORE-A-0007`) | a `Snapshot` is a 24-byte value over immutable resident structures |
+| read model | a read transaction *is* the snapshot (`STORE-A-0007`) | a refcounted `Snapshot` over immutable resident structures (`RECORD-A-0005`) |
 | indices | on disk, three permutations | in memory, rebuilt by replay |
 | history | epoch-suffixed index keys, `match_history` | every fact generation resident, one prefix range |
 | verifiability | trusts the backend | third-party chain verification, by design |
@@ -65,8 +77,8 @@ premises and share no contracts:
 Both consume [odin-rdf-parser](https://github.com/odin-rdf/odin-rdf-parser) and
 nothing else. [odin-rdf-shacl](https://github.com/odin-rdf/odin-rdf-shacl) and
 [odin-rdf-sparql](https://github.com/odin-rdf/odin-rdf-sparql) target the
-store today; consuming this repository's snapshot API is future work tracked
-on their side once the API here is real.
+store today; the snapshot read API here is real as of 2026-08-20, and
+consuming it is future work tracked on their side.
 
 ## Layout
 

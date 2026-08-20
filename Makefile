@@ -10,7 +10,10 @@ COLL := -collection:rdf=../odin-rdf-parser
 # binary, so the test target depends on tool; tests/proof runs the Python
 # verifier (tests/verify/rdflog_verify.py) against the fault corpus, so the
 # test target requires python3 and says so rather than failing cryptically.
-PKGS := record tests/tool tests/proof tests/scale
+# tests/scale is separate below: it is the measurement suite, gating the
+# vision's sub-second boot criterion, and runs optimized — a debug harness
+# would measure the harness, not the store.
+PKGS := record tests/tool tests/proof
 
 # There is no Term_ID width matrix here, deliberately. The family's dual-width
 # convention exists because odin-rdf-store makes ID width a build-time choice
@@ -40,9 +43,11 @@ test: tool ## Run the test suite
 		echo "-- $$pkg --"; \
 		odin test $$pkg $(TEST_FLAGS) || exit 1; \
 	done
+	@echo "-- tests/scale (optimized) --"
+	@odin test tests/scale $(TEST_FLAGS) -o:speed
 
 check: ## Vet every package
-	@for pkg in $(PKGS); do \
+	@for pkg in $(PKGS) tests/scale; do \
 		echo "-- $$pkg --"; \
 		odin check $$pkg -no-entry-point -vet -strict-style $(COLL) || exit 1; \
 	done

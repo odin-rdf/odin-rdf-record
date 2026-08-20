@@ -235,6 +235,61 @@ semantic (`log.md` §8 calls it a replay error, but a foreign consumer
 may legitimately tolerate it), and the CLI's verdict surface should not
 grow store-internal cases. Decide in T-0007 and record.
 
+## Status — 2026-08-20: all six tasks complete; the gate's numbers
+
+The store boots. Every task completed and committed the day after the
+initiative was drafted: T-0007 (resident build; the ISMS generator
+gained a real writer's disciplines, drifting the T-0006 corpus to
+80,879 terms / 16.5–37.9 MB), T-0008 (six permutations, radix-sorted
+after a 535 ms comparison-sort measurement — 39–57 ms optimized),
+T-0009 (refcounted snapshots with real reclamation; publication's
+memory model documented at the code), T-0010 (the §12 read API,
+oracle-proven; api.md §12.2's Pattern-G collision with the sentinel
+amendment discovered and amended — MATCH_DEFAULT_GRAPH), T-0011
+(store_open, writer resume byte-identical to an unbroken writer, the
+cross-restart sweep, ENV_NOTE_V1 = `{"format":1,"derived":"none"}`
+amended into log.md §5.5), T-0012 (the gate below).
+
+**The gate (optimized build, Apple Silicon dev machine, ISMS corpus:
+4×10⁵ ops, 80,879 terms, 340,145 facts):**
+
+| | bulk-loaded (10³ epochs) | hand-edited (2×10⁵) |
+|---|---|---|
+| full boot (`store_open`) | **246 ms** | **325 ms** |
+| — recover+replay+build | 189 ms | 274 ms |
+| — permutation sort | 46 ms | 45 ms |
+| resident footprint | **22.9 MB** | **25.9 MB** |
+| — fact table / permutations | 7.9 / 7.8 MB | 7.9 / 7.8 MB |
+| — arena / by-term map+rest | 3.0 / 3.5 MB | 3.0 / 3.5 MB |
+| — epoch table | 0.12 MB | 3.12 MB |
+| transient boot peak | 50.0 MB | 73.6 MB |
+
+Boot is 3–4× inside the vision's sub-second criterion. The footprint
+is api.md §10's budget met item by item (~26–29 MB at 4×10⁵ facts;
+ours is 340k facts — scaled, it lands on the estimate; the epoch
+table's 3.2 MB hand-edited figure is exact). Method: a tracking
+allocator as the store's allocator (true bytes, not arithmetic), with
+per-structure walks; `make test` runs tests/scale optimized because a
+debug harness measures the harness.
+
+**One finding, investigated rather than shrugged at:** the transient
+peak is dominated by the whole-segment read buffer — these logs are
+one 16.5/37.9 MB segment at the default 64 MB target, held during the
+walk alongside the live-quad map — not by the live map alone as api.md
+§6 expected. Peak ≈ resident + segment buffer + live map; the
+sequencing that keeps the sort scaffolding from stacking on the live
+map is implemented (boot destroys the Loader first). If wake storms
+ever matter, the levers are a smaller segment target or streaming/mmap
+reads through File_Ops; recorded here, not acted on.
+
+Linux production numbers remain to be taken when a production host
+exists (the standing dev-machine caveat). Exit criteria: met —
+`make test` green end to end, the store boots from its own log, serves
+epoch-pinned reads, resumes its writer. README and the family
+CLAUDE.md amended per the release convention.
+
+## Session handoff — 2026-08-19, before implementation begins (historical)
+
 **4. Toolchain notes that cost compile round-trips.** This machine's
 Odin (homebrew 2026-08): `core:os` is the os2-shaped API —
 `read_entire_file_from_path(path, allocator) -> (data, err)`,
