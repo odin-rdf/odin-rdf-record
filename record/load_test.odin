@@ -64,9 +64,15 @@ test_load_canonical :: proc(t: ^testing.T) {
 	// The arena holds every term definition byte-for-byte, and resolves
 	// both ways.
 	enc := [3]string{"\x01http://example.org/a", "\x01http://example.org/b", "\x01http://example.org/c"}
+	store_build_permutations(&s)
+	store_build_term_index(&s)
+	store_publish(&s)
+	snap, serr := store_latest(&s)
+	testing.expect_value(t, serr, Snapshot_Error.None)
+	defer snapshot_release(&snap)
 	for e, i in enc {
 		testing.expect_value(t, string(dict_bytes(&s.dict, u32(i+1))), e)
-		id, ok := dict_find(&s.dict, transmute([]byte)e)
+		id, ok := snapshot_find(snap, transmute([]byte)e)
 		testing.expect(t, ok, "an interned term resolves")
 		testing.expect_value(t, id, u32(i+1))
 	}

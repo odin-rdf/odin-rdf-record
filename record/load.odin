@@ -44,12 +44,16 @@ Load_Error :: enum {
 // `live` maps each live quad to its fact id — log.md par. 8's replay
 // scaffolding, which api.md par. 6 rules out of the steady state. It
 // lives on the Loader rather than the Store so that dropping it is
-// the default: loader_destroy takes it and leaves the Store standing.
-// Apply (the next initiative) is the one consumer that may want it
-// kept, and takes the Loader's word for it then.
+// the default: loader_destroy takes it and leaves the Store standing;
+// Apply checks liveness against the published SPO permutation instead
+// (RECORD-I-0003). `seen` is the same kind of scaffolding for terms:
+// par. 5.2's self-check that no two definitions carry one encoding,
+// keyed by views into the arena (chunks never move), dropped with the
+// Loader — the store keeps no map from encoding to id (decision 2).
 Loader :: struct {
 	store: ^Store,
 	live:  map[Quad]u32,
+	seen:  map[string]u32,
 	err:   Load_Error,
 	epoch: u64,     // the epoch being applied when err was set
 	op:    Fact_Op, // the offending op, zero-valued for non-op refusals
@@ -62,12 +66,14 @@ Loader :: struct {
 loader_init :: proc(ld: ^Loader, s: ^Store) {
 	ld.store = s
 	ld.live = make(map[Quad]u32, s.allocator)
+	ld.seen = make(map[string]u32, s.allocator)
 }
 
 // loader_destroy drops the transient scaffolding. The store it built
 // is untouched.
 loader_destroy :: proc(ld: ^Loader) {
 	delete(ld.live)
+	delete(ld.seen)
 	ld^ = {}
 }
 
@@ -103,6 +109,12 @@ load_commit :: proc(data: rawptr, epoch, wall, actor, reason: u64) -> bool {
 @(private)
 load_term :: proc(data: rawptr, id: u64, enc: []byte) -> bool {
 	ld := (^Loader)(data)
+	// Two ids with one meaning would break architecture.md par. 3.2's
+	// injectivity; a chain-perfect log that does it is refused here.
+	if string(enc) in ld.seen {
+		ld.term = id
+		return load_fail(ld, .Duplicate_Term)
+	}
 	// dict_add clones into the arena within the call, honoring the
 	// seam's borrow; the id it assigns is the log's, because replay's
 	// par. 5.2 self-check already matched this delivery against
@@ -113,6 +125,7 @@ load_term :: proc(data: rawptr, id: u64, enc: []byte) -> bool {
 		return load_fail(ld, err)
 	}
 	assert(u64(got) == id, "load_term: the arena and the log disagree about an id")
+	ld.seen[string(dict_bytes(&ld.store.dict, got))] = got
 	return true
 }
 

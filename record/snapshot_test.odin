@@ -31,6 +31,7 @@ test_snapshot_lifecycle :: proc(t: ^testing.T) {
 	epoch_append(&s, Epoch_Meta{wall = 1})
 	epoch_append(&s, Epoch_Meta{wall = 2})
 	store_build_permutations(&s)
+	store_build_term_index(&s)
 	store_publish(&s)
 
 	// Publication moved the permutations into the set.
@@ -92,6 +93,7 @@ test_snapshot_visibility_exact :: proc(t: ^testing.T) {
 		epoch_append(&s, Epoch_Meta{wall = e})
 	}
 	store_build_permutations(&s)
+	store_build_term_index(&s)
 	store_publish(&s)
 
 	want := [5][3]bool{
@@ -132,6 +134,7 @@ test_snapshot_publication_discipline :: proc(t: ^testing.T) {
 		epoch_append(&s, Epoch_Meta{wall = e})
 	}
 	store_build_permutations(&s)
+	store_build_term_index(&s)
 	store_publish(&s)
 	set1 := s.idx
 
@@ -160,6 +163,7 @@ test_snapshot_publication_discipline :: proc(t: ^testing.T) {
 	// to the readers still holding it; new acquisitions get set 2, and
 	// At(2) answers identically from either set.
 	store_build_permutations(&s)
+	store_build_term_index(&s)
 	store_publish(&s)
 	testing.expect(t, s.idx != set1, "a fresh set was installed")
 	testing.expect_value(t, s.published, u32(4))

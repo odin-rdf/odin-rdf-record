@@ -88,6 +88,7 @@ rt_build :: proc(t: ^testing.T, fs: ^OFS, s: ^Store) -> (rt: RT) {
 	testing.expect_value(t, err, Open_Error.None)
 	testing.expect_value(t, ld.err, Load_Error.None)
 	store_build_permutations(s)
+	store_build_term_index(s)
 	store_publish(s)
 	return rt
 }
@@ -196,6 +197,12 @@ test_read_oracle :: proc(t: ^testing.T) {
 						slice.equal(got[:], want[:]),
 						"pattern %v epoch %d origin %v graphs %v: got %v, want %v",
 						p, epoch, origin, graphs, got, want,
+					)
+					testing.expectf(
+						t,
+						snapshot_exists(snap, p, f) == (len(want) > 0),
+						"pattern %v epoch %d origin %v graphs %v: exists disagrees with the oracle",
+						p, epoch, origin, graphs,
 					)
 					checked += 1
 					delete(want)
@@ -326,13 +333,86 @@ test_read_resolve :: proc(t: ^testing.T) {
 		testing.expectf(t, !ok, "%v misses", m)
 	}
 
-	// The n_terms bound: a term interned after this snapshot's
-	// publication is a miss for it. Simulated directly on the arena.
+	// The set bound: a term interned after this snapshot's publication
+	// is a miss for it — it is in no index the snapshot holds — and a
+	// hit for a snapshot of the set that published it, while the older
+	// snapshot still misses. The writer's steps, driven directly.
 	late, aerr := dict_add(&s.dict, transmute([]byte)string("\x01http://ex/late"), s.allocator)
 	testing.expect_value(t, aerr, Load_Error.None)
 	_, late_ok := snapshot_resolve(snap, rdf.IRI("http://ex/late"))
 	testing.expect(t, !late_ok, "a post-publication term is unknown to the snapshot")
 	testing.expect_value(t, late, u32(9))
+	store_build_permutations(&s)
+	store_merge_term_index(&s, snap.idx.terms)
+	store_publish(&s)
+	newer, nerr := store_latest(&s)
+	testing.expect_value(t, nerr, Snapshot_Error.None)
+	defer snapshot_release(&newer)
+	got, got_ok := snapshot_resolve(newer, rdf.IRI("http://ex/late"))
+	testing.expect(t, got_ok && got == 9, "the set that published the term resolves it")
+	testing.expect_value(t, snapshot_terms(newer), u32(9))
+	testing.expect_value(t, snapshot_terms(snap), u32(8))
+	_, still := snapshot_resolve(snap, rdf.IRI("http://ex/late"))
+	testing.expect(t, !still, "the older snapshot still misses it")
+	testing.expect_value(t, string(snapshot_bytes(newer, 9)), "\x01http://ex/late")
+}
+
+@(test)
+test_read_kind :: proc(t: ^testing.T) {
+	// Every tag the codec knows plus every inline type, each kind
+	// checked against the decoded term's own union variant.
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	encs := [?]string{
+		"\x01http://ex/a", // 1 IRI
+		"\x02b0", // 2 blank
+		"\x03hello", // 3 string
+		"\x04\x02enHello", // 4 lang
+		"\x01http://www.w3.org/2001/XMLSchema#long", // 5 IRI (a datatype)
+		"\x05\x00\x00\x00\x00\x00\x00\x00\x0599", // 6 typed, datatype 5
+		"\x01http://ex/ns/", // 7 IRI (a namespace)
+		"\x06\x00\x00\x00\x00\x00\x00\x00\x07local", // 8 split IRI over 7
+	}
+	for e in encs {
+		_, err := dict_add(&s.dict, transmute([]byte)e, s.allocator)
+		testing.expect_value(t, err, Load_Error.None)
+	}
+	store_build_permutations(&s)
+	store_build_term_index(&s)
+	store_publish(&s)
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+
+	want := [?]Term_Kind{.IRI, .Blank, .Literal, .Literal, .IRI, .Literal, .IRI, .IRI}
+	buf: [INLINE_LEXICAL_MAX]byte
+	for k, i in want {
+		id := u32(i + 1)
+		testing.expect_value(t, snapshot_kind(snap, id), k)
+		term, ok := snapshot_term(snap, id, buf[:])
+		testing.expectf(t, ok, "id %d decodes", id)
+		variant: Term_Kind
+		switch v in term {
+		case rdf.IRI:
+			variant = .IRI
+			if id == 8 {
+				delete(string(v)) // the split IRI's one allocation
+			}
+		case rdf.Blank_Node:
+			variant = .Blank
+		case rdf.Literal:
+			variant = .Literal
+		case ^rdf.Triple:
+			testing.fail(t)
+		}
+		testing.expect_value(t, variant, k)
+	}
+	five, _ := inline_integer(5)
+	testing.expect_value(t, snapshot_kind(snap, resident_id(five)), Term_Kind.Literal)
+	tru, _ := term_inline(rdf.Literal{lexical = "true", datatype = rdf.XSD_BOOLEAN})
+	testing.expect_value(t, snapshot_kind(snap, tru), Term_Kind.Literal)
+	day, _ := term_inline(rdf.Literal{lexical = "2024-02-29", datatype = XSD_DATE})
+	testing.expect_value(t, snapshot_kind(snap, day), Term_Kind.Literal)
 }
 
 @(test)

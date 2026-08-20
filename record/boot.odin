@@ -7,10 +7,11 @@
 // its pieces were each built and proven separately first.
 //
 // One sequencing choice is load-bearing for the reload peak: the
-// Loader (and its transient live-quad map, ~the largest transient of
-// the boot) is destroyed BEFORE the permutation sort allocates its
-// scaffolding, so the boot's peak memory is the larger of the two,
-// never their sum.
+// Loader (and its transient live-quad and seen-term maps, ~the largest
+// transients of the boot) is destroyed BEFORE the permutation sort
+// allocates its scaffolding, so the boot's peak memory is the larger
+// of the two, never their sum. The term index is sorted after the
+// permutations, before the one publication.
 package record
 
 // ENV_NOTE_V1 is the startup environment note's payload — the v1
@@ -92,6 +93,7 @@ store_open :: proc(
 	}
 
 	store_build_permutations(s)
+	store_build_term_index(s)
 	store_publish(s)
 
 	if !fresh {

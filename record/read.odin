@@ -124,8 +124,8 @@ snapshot_match_as :: proc(snap: Snapshot, p: Pattern, order: Order) -> Range {
 		want[k] = v
 	}
 	ids := snap.idx.ord[order]
-	lo := prefix_bound(snap.store, ids, key, want, k, false)
-	hi := prefix_bound(snap.store, ids, key, want, k, true)
+	lo := prefix_bound(snap.idx, ids, key, want, k, false)
+	hi := prefix_bound(snap.idx, ids, key, want, k, true)
 	return Range{snap = snap, order = order, main = ids[lo:hi], residual = p}
 }
 
@@ -163,7 +163,7 @@ scan_next :: proc(sc: ^Scan) -> (id: u32, ok: bool) {
 	candidates: for len(sc.ids) > 0 {
 		id = sc.ids[0]
 		sc.ids = sc.ids[1:]
-		f := store_fact(sc.snap.store, id)
+		f := fact_in(sc.snap.idx.facts, id)
 		retract := sync.atomic_load_explicit(&f.retract, .Relaxed)
 		if !(f.assert <= sc.snap.epoch && sc.snap.epoch < retract) {
 			continue
@@ -228,14 +228,53 @@ snapshot_resolve :: proc(snap: Snapshot, t: rdf.Term, allocator := context.alloc
 
 // snapshot_find is the dictionary probe behind snapshot_resolve and
 // the intern: a canonical encoding to the id this snapshot knows it
-// by, bounded by n_terms — a term defined after publication is a miss.
+// by — a binary search of the set's term index (termindex.odin), so a
+// term defined after publication is a miss by construction rather
+// than by a bound.
 @(private)
 snapshot_find :: proc(snap: Snapshot, enc: []byte) -> (id: u32, ok: bool) {
-	id, ok = dict_find(&snap.store.dict, enc)
-	if !ok || id > snap.idx.n_terms {
-		return 0, false
+	return term_index_find(snap.idx, enc)
+}
+
+// Term_Kind is what snapshot_kind answers: the three kinds of RDF term
+// this store can hold, with no reference to how they are encoded.
+Term_Kind :: enum u8 {
+	IRI,
+	Blank,
+	Literal,
+}
+
+// snapshot_kind reports a resident id's kind without decoding it —
+// what an engine reads off a tagged id in odin-rdf-store, answered
+// here from the one place the information is (RECORD-I-0003
+// decision 8): an inlined id is always a literal, and a dictionary
+// id's kind is its encoding's tag byte, which this procedure keeps
+// private to the store so no consumer depends on the tag layout.
+// Allocation-free; asserts on an id this snapshot does not know, as
+// snapshot_bytes does.
+snapshot_kind :: proc(snap: Snapshot, id: u32) -> Term_Kind {
+	assert(snap.idx != nil, "snapshot_kind: a released snapshot")
+	if id & RES_INLINE_FLAG != 0 {
+		return .Literal
 	}
-	return id, true
+	assert(id != 0 && id <= snap.idx.n_terms, "snapshot_kind: not a term of this snapshot")
+	switch set_bytes(snap.idx, id)[0] {
+	case TERM_TAG_IRI, TERM_TAG_SPLIT_IRI:
+		return .IRI
+	case TERM_TAG_BLANK:
+		return .Blank
+	}
+	return .Literal
+}
+
+// snapshot_exists answers whether any fact matches — api.md par. 12.5's
+// layer-2 existence test, which is layer 1 with a loop around it: the
+// range, the scan, the first hit. It is Apply's live-quad check
+// (log.md par. 5.3) made public, and a planner's emptiness probe.
+snapshot_exists :: proc(snap: Snapshot, p: Pattern, f: Filter) -> bool {
+	sc := range_iter(snapshot_match(snap, p), f)
+	_, hit := scan_next(&sc)
+	return hit
 }
 
 // snapshot_bytes returns a dictionary term's canonical encoding as a
@@ -245,7 +284,7 @@ snapshot_find :: proc(snap: Snapshot, enc: []byte) -> (id: u32, ok: bool) {
 snapshot_bytes :: proc(snap: Snapshot, id: u32) -> []byte {
 	assert(snap.idx != nil, "snapshot_bytes: a released snapshot")
 	assert(id != 0 && id&RES_INLINE_FLAG == 0 && id <= snap.idx.n_terms, "snapshot_bytes: not a dictionary id of this snapshot")
-	return dict_bytes(&snap.store.dict, id)
+	return set_bytes(snap.idx, id)
 }
 
 // snapshot_term materializes a resident id as a data-model term — the
@@ -271,7 +310,7 @@ snapshot_term :: proc(
 		return nil, false
 	}
 	snap := snap
-	return term_decode(dict_bytes(&snap.store.dict, id), resolve_snap_iri, &snap, allocator)
+	return term_decode(set_bytes(snap.idx, id), resolve_snap_iri, &snap, allocator)
 }
 
 // --- order selection -------------------------------------------------
@@ -318,11 +357,11 @@ pattern_component :: proc(p: Pattern, c: Component) -> u32 {
 // prefix window: the first index whose fact compares >= the wanted
 // prefix (upper false), or > it (upper true).
 @(private = "file")
-prefix_bound :: proc(s: ^Store, ids: []u32, key: [4]Component, want: [3]u32, k: int, upper: bool) -> int {
+prefix_bound :: proc(set: ^Index_Set, ids: []u32, key: [4]Component, want: [3]u32, k: int, upper: bool) -> int {
 	lo, hi := 0, len(ids)
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)
-		f := store_fact(s, ids[mid])
+		f := fact_in(set.facts, ids[mid])
 		cmp := 0
 		for j in 0 ..< k {
 			v := fact_component(f, key[j])
@@ -376,7 +415,7 @@ resolve_snap_iri :: proc(data: rawptr, id: u64) -> (iri: string, ok: bool) {
 	if id == 0 || id&INLINE_FLAG != 0 || id > u64(snap.idx.n_terms) {
 		return "", false
 	}
-	enc := dict_bytes(&snap.store.dict, u32(id))
+	enc := set_bytes(snap.idx, u32(id))
 	if len(enc) == 0 || enc[0] != TERM_TAG_IRI {
 		return "", false
 	}

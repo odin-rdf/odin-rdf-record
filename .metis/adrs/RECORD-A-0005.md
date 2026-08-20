@@ -70,6 +70,23 @@ Three parts:
 
 Refcounting is the smallest mechanism that makes "free the old set" safe,
 and it is uncontended: one atomic increment per snapshot at request rates.
+
+> **Amended 2026-08-20 (RECORD-I-0003 decision 3, RECORD-T-0014).** "Atomically
+> load the current set and increment its count" is two operations, and a
+> publish between them frees the set the count is about to be raised on. The
+> increment is therefore taken under a mutex that the publisher also takes
+> around its pointer swap — on *acquire* (`store_latest`, `store_at`) and on
+> *publish*, and nowhere else. The distinction this ADR should have drawn: the
+> **read path** is lock-free — match, iterate, resolve, bytes, term take no lock
+> and never will — and the **acquire path** is one uncontended lock per request.
+> At the workload's ~99:1 read-to-write ratio that is the whole cost, and it
+> buys a proof instead of a bound; a retire list (freeing a superseded set one
+> publish later) was considered and rejected because it narrows the window to
+> one commit interval without closing it. Release still takes no lock: it can
+> only lower a count the lock saw raised. The set also grew its own copies of
+> the chunk lists a reader indexes (`api.md` §13.8 amendment) — part 1's "owned
+> by the store, never by a set" stands for the chunk payloads, and the lists
+> that locate them are the set's.
 The alternatives are worse fits — epoch-based reclamation is machinery for
 lock-free writers we do not have (there is exactly one writer), and never
 freeing (arena-per-set) leaks a set per commit. Deferring the delta

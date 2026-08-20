@@ -480,6 +480,19 @@ type Dict struct {
   first seen. Its keys are built over `blob` with `unsafe.String`, so they cost no
   allocation and add no bytes beyond the map's own structure.
 
+  > **Amended 2026-08-20 (RECORD-I-0003 decision 2, RECORD-T-0014).** There is
+  > no `byTerm`. §12.7's `Resolve` probes it on the *read* path, so the map was
+  > both mutated by the writer and probed by readers, and a map is not a
+  > concurrent structure. In its place the published index set (§12.1) carries a
+  > sorted `[]ID` of dictionary ids ordered by canonical encoding — built once at
+  > boot by sorting, and per commit by merging the commit's new ids into a fresh
+  > array — and `Resolve` binary-searches it comparing arena bytes (~17 probes at
+  > 8×10⁴ terms). The writer interns against that index plus a transient
+  > per-changeset map of the terms it is adding; replay's §5.2 duplicate check
+  > uses a transient map dropped at boot's end. Measured: the map's ~3.5 MB
+  > leaves the footprint, ~0.3 MB of index arrives (§10), and the boot-time sort
+  > is recorded in RECORD-T-0014.
+
 Total ~7 MB against ~18 MB, for one type's worth of contained code and no custom
 hash table.
 
@@ -1200,7 +1213,16 @@ func (s Snapshot) Term(id ID) Term           // decoded
 ```
 
 `Resolve` tries the inline encoding first (§3), then `Dict.byTerm`. `Bytes`
-returns **a view into the arena blob** — no copy, no allocation. That is a
+returns **a view into the arena blob** — no copy, no allocation.
+
+> **Amended 2026-08-20 (RECORD-T-0014).** Then the index set's sorted term
+> index, by binary search — not a map; see the §4 amendment. The probe is
+> bounded by the set it searches, so a term interned after the snapshot's
+> publication is a miss by construction rather than by an `nTerms` check.
+> Two procedures joined this section at the same time: `Kind(id)` — IRI, blank
+> node or literal, without decoding and without exposing the encoding's tag
+> layout to consumers — and §12.5's `Exists`, built as layer 1 with a loop
+> around it. That is a
 dividend of §4's layout that was not obvious when it was specified: §7.2 worried
 that resolving IDs to terms "dominates everything else" on a large result set, and
 with the arena the resolve step allocates nothing at all.
@@ -1750,6 +1772,17 @@ type indexSet struct {
 
 func (s Snapshot) Terms() ID // = idx.nTerms
 ```
+
+> **Amended 2026-08-20 (RECORD-T-0014).** Without a collector the sentence
+> "every other structure a reader touches lives inside `indexSet`" has to be
+> made true by hand: the Odin set carries *copies* of the lists a reader needs —
+> the fact chunk list, the dictionary chunk list with its fill counts and `off`,
+> the epoch chunk list — taken at publication (4 bytes per term for `off`, a few
+> hundred bytes of headers otherwise), because the store's own lists relocate
+> when the writer grows them and nothing would keep the old backing alive for a
+> reader mid-read. A reader therefore touches the store through exactly one
+> kind of memory: chunk payloads, which never move and never change below the
+> set's bounds. The count below is one of those copies' lengths.
 
 Correct by construction rather than by timing, and it is wanted in four places:
 sizing any per-request structure indexed by ID (§13.5), the single

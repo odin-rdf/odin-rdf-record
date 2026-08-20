@@ -16,6 +16,7 @@
 package record
 
 import "base:runtime"
+import "core:sync"
 
 // LIVE_EPOCH is the retract field of a fact that is still live
 // (api.md par. 2.1): visibility at epoch e is
@@ -131,22 +132,27 @@ DICT_MAX_CHUNKS :: 1 << (32 - DICT_CHUNK_BITS)
 // arena is a near-literal copy of the log's term definitions. `off[i]`
 // locates term i+1 (ids are 1-based; 0 is "none") and dict_bytes
 // recovers its length from the next term's offset — two loads, no
-// pointer chase. `by_term` maps an encoding back to its id for the
-// resolve path; its keys are zero-copy views into the chunks, which is
-// what the never-move invariant buys.
+// pointer chase. There is no map from encoding to id (RECORD-I-0003
+// decision 2, amending par. 4): the read side resolves through the
+// published Index_Set's sorted term index (termindex.odin), and the
+// write side through that index plus the intern's transient pending
+// map, so nothing here is both mutated by the writer and probed by a
+// reader. The arena's own lists — chunks, used, off — are the writer's;
+// a reader holds the copies its set took at publication.
 Dict :: struct {
-	chunks:  [dynamic][]byte,
-	used:    [dynamic]u32, // bytes filled in each chunk; final once a chunk is left
-	off:     [dynamic]u32, // packed (chunk << DICT_CHUNK_BITS | offset), one per term
-	by_term: map[string]u32,
+	chunks: [dynamic][]byte,
+	used:   [dynamic]u32, // bytes filled in each chunk; final once a chunk is left
+	off:    [dynamic]u32, // packed (chunk << DICT_CHUNK_BITS | offset), one per term
 }
 
 // Store is the memory-resident projection of one log (api.md): built
 // by replay through the load path's Loader, read through snapshots
-// once those exist (RECORD-T-0009). Fields are read-only to consumers;
-// the Loader is the only writer today. The permutations, the
-// published-epoch discipline, and the read API land in this struct as
-// their tasks do.
+// (RECORD-T-0009). Fields are the writer's; a reader touches nothing
+// here but the chunk payloads its Index_Set points into, which never
+// move and never change below the set's bounds (see snapshot.odin's
+// package comment for the argument). The permutations and the term
+// index are built into `ord` and `terms` and moved into an Index_Set
+// on publish, so a rebuild after publish cannot dangle a published set.
 Store :: struct {
 	facts:     [dynamic][]Fact, // FACT_CHUNK_SIZE-fact chunks; never relocated
 	n_facts:   u32, // facts appended — the fact-id high-water mark
@@ -156,8 +162,10 @@ Store :: struct {
 	n_epochs:  u32, // committed epochs; equals the last epoch, since epochs are contiguous from 1
 	notes:     [dynamic]Env_Note, // in log order; last_epoch is non-decreasing
 	ord:       [Order][]u32, // the six sorted FactID permutations (permute.odin); moved into an Index_Set on publish
-	idx:       ^Index_Set, // the published index set (snapshot.odin); atomic, nil until the first publish
-	published: u32, // the published epoch (log.md par. 7.1 step 5); atomic, stored after idx
+	terms:     []u32, // the term index — dictionary ids sorted by encoding (termindex.odin); moved into an Index_Set on publish
+	idx:       ^Index_Set, // the published index set (snapshot.odin); nil until the first publish; swapped under mu
+	published: u32, // the published epoch (log.md par. 7.1 step 5); stored after idx, under mu
+	mu:        sync.Mutex, // taken by acquire (store_latest, store_at) and by publish, and by nothing else (RECORD-I-0003 decision 3)
 	allocator: runtime.Allocator,
 }
 
@@ -173,7 +181,6 @@ store_init :: proc(s: ^Store, allocator := context.allocator) {
 	s.dict.chunks = make([dynamic][]byte, allocator)
 	s.dict.used = make([dynamic]u32, allocator)
 	s.dict.off = make([dynamic]u32, allocator)
-	s.dict.by_term = make(map[string]u32, allocator)
 }
 
 // store_destroy frees everything the store owns. Views handed out by
@@ -202,23 +209,32 @@ store_destroy :: proc(s: ^Store) {
 	for o in Order {
 		delete(s.ord[o], s.allocator)
 	}
+	delete(s.terms, s.allocator)
 	for c in s.dict.chunks {
 		delete(c, s.allocator)
 	}
 	delete(s.dict.chunks)
 	delete(s.dict.used)
 	delete(s.dict.off)
-	delete(s.dict.by_term)
 	s^ = {}
 }
 
 // store_fact returns fact `id` in place — a shift, a mask, and a load
 // (api.md par. 2.3). The pointer stays valid for the life of the
-// store: chunks never move. Callers read; the load path is the only
-// writer.
+// store: chunks never move. The writer's accessor: it reads the
+// store's own chunk list, which the writer grows. A reader goes
+// through its snapshot (snapshot_fact), whose set holds the list as
+// it stood at publication.
 store_fact :: proc(s: ^Store, id: u32) -> ^Fact {
 	assert(id < s.n_facts, "store_fact: a fact id past the table")
-	return &s.facts[id >> FACT_CHUNK_BITS][id & FACT_CHUNK_MASK]
+	return fact_in(s.facts[:], id)
+}
+
+// fact_in indexes a fact chunk list — the one shape shared by the
+// writer's store_fact and the reader's snapshot_fact.
+@(private)
+fact_in :: proc(chunks: [][]Fact, id: u32) -> ^Fact {
+	return &chunks[id >> FACT_CHUNK_BITS][id & FACT_CHUNK_MASK]
 }
 
 // store_derived reports fact `id`'s origin from the parallel bitset
@@ -265,42 +281,43 @@ store_note_at :: proc(s: ^Store, epoch: u32) -> (payload: []byte, ok: bool) {
 // arena — no copy, valid for the life of the store (api.md par. 12.7).
 // Two loads: the term's packed offset, and the next term's — or the
 // chunk's fill where the next term opened a new chunk, which is final
-// the moment a chunk stops being the last.
+// the moment a chunk stops being the last. The writer's accessor over
+// the store's own lists; a reader's is snapshot_bytes, over its set's
+// copies, with the set's n_terms as the bound.
 dict_bytes :: proc(d: ^Dict, id: u32) -> []byte {
+	return dict_bytes_in(d.chunks[:], d.used[:], d.off[:], u32(len(d.off)), id)
+}
+
+// dict_bytes_in is the arena's length recovery over whichever lists
+// the caller holds — the store's, or a set's copies of them — bounded
+// by n_terms, the count those lists are consistent for.
+@(private)
+dict_bytes_in :: proc(chunks: [][]byte, used: []u32, off: []u32, n_terms: u32, id: u32) -> []byte {
 	assert(id != 0 && id & RES_INLINE_FLAG == 0, "dict_bytes: not a dictionary id")
-	assert(int(id) <= len(d.off), "dict_bytes: an id past the dictionary")
-	packed := d.off[id-1]
+	assert(id <= n_terms, "dict_bytes: an id past the dictionary")
+	packed := off[id-1]
 	c := int(packed >> DICT_CHUNK_BITS)
 	at := packed & DICT_CHUNK_MASK
-	end := d.used[c]
-	if int(id) < len(d.off) {
-		next := d.off[id]
+	end := used[c]
+	if id < n_terms {
+		next := off[id]
 		if int(next >> DICT_CHUNK_BITS) == c {
 			end = next & DICT_CHUNK_MASK
 		}
 	}
-	return d.chunks[c][at:end]
-}
-
-// dict_find resolves a canonical encoding to its dictionary id —
-// ok=false for a term this store has never seen, which api.md
-// par. 12.2 insists is an ordinary case costing one hash probe.
-dict_find :: proc(d: ^Dict, enc: []byte) -> (id: u32, ok: bool) {
-	return d.by_term[string(enc)]
+	return chunks[c][at:end]
 }
 
 // dict_add interns one canonical encoding as the next dictionary id,
-// copying it into the arena and keying by_term with a view over the
-// copy. Refuses an encoding already interned (.Duplicate_Term — the
+// copying it into the arena. It does not check for a duplicate — the
 // arena cannot represent two ids with one meaning without breaking
-// architecture.md par. 3.2's injectivity) and an arena past its u32
-// addressing (.Dict_Overflow). The load path is the only caller today;
-// Apply will be the second.
+// architecture.md par. 3.2's injectivity, but keeping a map here for
+// the check is what RECORD-I-0003 decision 2 removed: replay's
+// par. 5.2 self-check lives in the Loader's transient map, and the
+// write path's intern never presents a duplicate. Refuses an arena
+// past its u32 addressing (.Dict_Overflow).
 @(private)
 dict_add :: proc(d: ^Dict, enc: []byte, allocator: runtime.Allocator) -> (id: u32, err: Load_Error) {
-	if string(enc) in d.by_term {
-		return 0, .Duplicate_Term
-	}
 	need := len(enc)
 	if len(d.chunks) == 0 || int(d.used[len(d.used)-1])+need > len(d.chunks[len(d.chunks)-1]) {
 		if len(d.chunks) >= DICT_MAX_CHUNKS {
@@ -315,9 +332,7 @@ dict_add :: proc(d: ^Dict, enc: []byte, allocator: runtime.Allocator) -> (id: u3
 	copy(d.chunks[c][at:], enc)
 	d.used[c] += u32(need)
 	append(&d.off, u32(c) << DICT_CHUNK_BITS | at)
-	id = u32(len(d.off))
-	d.by_term[string(d.chunks[c][int(at):int(at)+need])] = id
-	return id, .None
+	return u32(len(d.off)), .None
 }
 
 // fact_append appends one fact and its origin bit, growing a chunk

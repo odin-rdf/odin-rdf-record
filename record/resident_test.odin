@@ -67,7 +67,7 @@ test_dict_arena :: proc(t: ^testing.T) {
 	d := &s.dict
 
 	// Interning assigns 1-based ids in call order; bytes round-trip as
-	// views; lookup answers both ways.
+	// views.
 	a := transmute([]byte)string("\x01http://example.org/a")
 	bb := transmute([]byte)string("\x03some literal")
 	id_a, err_a := dict_add(d, a, s.allocator)
@@ -78,17 +78,8 @@ test_dict_arena :: proc(t: ^testing.T) {
 	testing.expect_value(t, id_b, u32(2))
 	testing.expect_value(t, string(dict_bytes(d, 1)), string(a))
 	testing.expect_value(t, string(dict_bytes(d, 2)), string(bb))
-	found, ok := dict_find(d, a)
-	testing.expect(t, ok, "an interned term resolves")
-	testing.expect_value(t, found, u32(1))
-	_, missing := dict_find(d, transmute([]byte)string("\x01http://example.org/zzz"))
-	testing.expect(t, !missing, "an unseen term is an ordinary miss")
-
-	// A duplicate encoding is refused: two ids with one meaning would
-	// break injectivity.
-	_, err_dup := dict_add(d, a, s.allocator)
-	testing.expect_value(t, err_dup, Load_Error.Duplicate_Term)
-	testing.expect_value(t, len(d.off), 2)
+	// Resolution the other way is the term index's (termindex_test.odin);
+	// the arena keeps no map, and duplicate refusal is the Loader's.
 
 	// An encoding larger than a chunk gets a dedicated chunk of its
 	// exact size; the term before it ends at its chunk's fill, the term

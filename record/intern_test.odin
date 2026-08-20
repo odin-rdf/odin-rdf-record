@@ -55,6 +55,7 @@ it_store :: proc(t: ^testing.T, s: ^Store, encs: []string) -> Snapshot {
 		testing.expect_value(t, err, Load_Error.None)
 	}
 	store_build_permutations(s)
+	store_build_term_index(s)
 	store_publish(s)
 	snap, serr := store_latest(s)
 	testing.expect_value(t, serr, Snapshot_Error.None)
@@ -357,6 +358,7 @@ test_intern_numbering_is_the_logs :: proc(t: ^testing.T) {
 	testing.expect_value(t, rerr, Open_Error.None)
 	testing.expect_value(t, ld.err, Load_Error.None)
 	store_build_permutations(&s)
+	store_build_term_index(&s)
 	store_publish(&s)
 	snap, serr := store_latest(&s)
 	testing.expect_value(t, serr, Snapshot_Error.None)

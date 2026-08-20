@@ -505,6 +505,7 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	// patterns — components lifted from real facts across the table —
 	// at the head and at a mid-history epoch, each checked against a
 	// brute-force scan of the whole fact table.
+	rec.store_build_term_index(&s)
 	rec.store_publish(&s)
 	for epoch in ([2]u32{s.published, s.published / 2}) {
 		snap, serr := rec.store_at(&s, epoch)
@@ -600,12 +601,16 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	rec.snapshot_release(&snap)
 
 	// The resident footprint, by structure (bytes actually allocated),
-	// with the by-term map and small slack as the tracker's remainder.
+	// with small slack as the tracker's remainder. The set's copies are
+	// the term index and the offsets (4 bytes per term each) plus the
+	// chunk lists, which are headers.
 	fact_b := len(s.facts) * rec.FACT_CHUNK_SIZE * size_of(rec.Fact)
 	perm_b := 0
 	for o in rec.Order {
 		perm_b += len(s.idx.ord[o]) * size_of(u32)
 	}
+	set_b := len(s.idx.terms)*size_of(u32) + len(s.idx.off)*size_of(u32) + len(s.idx.used)*size_of(u32)
+	set_b += len(s.idx.facts)*size_of([]rec.Fact) + len(s.idx.dict)*size_of([]byte) + len(s.idx.epochs)*size_of([]rec.Epoch_Meta)
 	epoch_b := len(s.epochs) * rec.EPOCH_CHUNK_SIZE * size_of(rec.Epoch_Meta)
 	arena_b := 0
 	for c in s.dict.chunks {
@@ -615,13 +620,13 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	derived_b := cap(s.derived)*size_of(u64) + len(s.idx.derived)*size_of(u64)
 	resident := int(track.current_memory_allocated)
 	peak := int(track.peak_memory_allocated)
-	accounted := fact_b + perm_b + epoch_b + arena_b + off_b + derived_b
+	accounted := fact_b + perm_b + epoch_b + arena_b + off_b + derived_b + set_b
 	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
 
 	log.infof(
-		"%s boot: %.0f ms — resident %.1f MB (facts %.1f, permutations %.1f, arena %.1f, epochs %.2f, offsets+origin %.2f, by-term map+rest %.1f), transient peak %.1f MB",
+		"%s boot: %.0f ms — resident %.1f MB (facts %.1f, permutations %.1f, arena %.1f, epochs %.2f, offsets+origin %.2f, term index+set copies %.2f, rest %.1f), transient peak %.1f MB",
 		name, boot_ms, mb(resident), mb(fact_b), mb(perm_b), mb(arena_b), mb(epoch_b),
-		mb(off_b + derived_b), mb(resident - accounted), mb(peak),
+		mb(off_b + derived_b), mb(set_b), mb(resident - accounted), mb(peak),
 	)
 	testing.expect(t, boot_ms < 1000, "full boot stays under a second")
 	testing.expect(t, resident > accounted, "the walked structures are within what the tracker saw")
@@ -647,8 +652,11 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	start = time.tick_now()
 	rec.store_build_permutations(&s2)
 	sort_ms := time.duration_milliseconds(time.tick_since(start))
+	start = time.tick_now()
+	rec.store_build_term_index(&s2)
+	index_ms := time.duration_milliseconds(time.tick_since(start))
 	rec.store_publish(&s2)
-	log.infof("%s boot phases: recover+replay+build %.0f ms, permutation sort %.0f ms", name, load_ms, sort_ms)
+	log.infof("%s boot phases: recover+replay+build %.0f ms, permutation sort %.0f ms, term index %.0f ms", name, load_ms, sort_ms, index_ms)
 }
 
 @(test)
