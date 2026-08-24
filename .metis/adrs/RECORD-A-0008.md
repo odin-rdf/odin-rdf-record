@@ -166,6 +166,29 @@ same trap for whatever tag is reserved next.
   verb and by stating the rule in `snapshot_term`'s doc comment, which is where
   a consumer will actually read it.
 
+> **Amended 2026-08-24, same day (`RECORD-T-0021`'s injectivity re-check).**
+> Decision 3 is load-bearing in a way this ADR understated. Tag `0x07`'s
+> injectivity is **conditional on each component id being the canonical id for
+> its term**, which is architecture.md §3.4's invariant — "bit 63 = 1 ->
+> inlined term, **no dictionary entry exists**". The writer maintains it by
+> construction (`intern_term` tries `term_inline` first, and `snapshot_resolve`
+> does the same), but **replay does not check it**: `load_term`
+> (`record/load.odin:110`) refuses only `.Duplicate_Term`, which is
+> byte-identical encodings.
+>
+> So a chain-perfect, verifier-clean log that defines `0x05 | xsd:integer | "1"`
+> as a dictionary term gives one abstract term two ids. **Today that is a
+> fact-level defect** — two facts about "the same" literal do not unify — and
+> pre-existing. **With triple terms it becomes a dictionary-level one**: the
+> ambiguity is baked into another term's bytes, so two distinct `0x07`
+> encodings, and therefore two dictionary ids, denote one abstract triple term.
+> A silent term *split*, the inverse of the silent merge §3.2's hashed-key path
+> takes care to prevent.
+>
+> Escalated by this initiative, not created by it, and closing it is a change to
+> the replay path rather than to either new tag — see `RECORD-T-0021`'s Status
+> for the finding as filed.
+
 ### Neutral
 - `term_inline` and the inline path are untouched: three ids do not fit in 28
   bits, so a triple term is a dictionary term always, and `RECORD-A-0001` stays

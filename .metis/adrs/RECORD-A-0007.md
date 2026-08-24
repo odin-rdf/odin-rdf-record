@@ -48,6 +48,29 @@ Two new term-definition tags, both in the canonical encoding of
   it bytes would be this store inventing a term shape — so it keeps returning
   `.Unsupported_Term`.
 
+> **Amended 2026-08-24, same day (`RECORD-T-0021`'s injectivity re-check).**
+> Tag `0x08` as laid out above is injective **only with three decoder-side
+> refusals**, none of which this ADR stated when it was written:
+>
+> - **`dir` must be validated against `{LTR, RTL}`.** `rdf.Direction` is a u8
+>   enum of three values (`../odin-rdf-parser/rdf/terms.odin:26`), so bytes
+>   `0x03`..`0xFF` are not directions. A decoder that mapped them to anything
+>   would make several byte strings decode to one term.
+> - **`dir` must never be `.None` (`0x00`) under `0x08`.** Otherwise `"x"@en`
+>   has two encodings — `0x04`, and `0x08` with `dir = 0` — which is exactly
+>   the defect §3.2 names for language-tag case: "the dictionary must not
+>   admit both".
+> - **`langlen` must be non-zero**, the mirror of the Context bullet's refusal
+>   above. The parser's own invariant states both halves
+>   (`../odin-rdf-parser/rdf/terms.odin:38`): a language is non-empty iff the
+>   datatype is `rdf:langString` or `rdf:dirLangString`, and a direction is not
+>   `.None` iff `rdf:dirLangString`.
+>
+> All three are **decoder-side**, not merely encoder-side. §3.2's injectivity
+> is a property of the format rather than of this implementation's encoder, and
+> the decoder is what a third party's log actually meets. `RECORD-T-0022`'s
+> criteria carry them.
+
 Neither tag changes a single existing byte, and no v1 log contains either. The
 format is therefore compatible in one direction only: a v2 reader could read
 every v1 log; a v1 reader meeting `0x07` cannot read a v2 one.

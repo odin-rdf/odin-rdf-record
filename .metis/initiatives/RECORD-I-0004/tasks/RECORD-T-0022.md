@@ -44,6 +44,14 @@ This is the layer the document describes, tested against the document.
 - [ ] **The base-direction tag encodes and decodes**, under the tag and
       layout `RECORD-T-0021` chose. `rdf.Literal` already carries
       `direction` as an enum, so the data model needs nothing.
+- [ ] **Tag `0x08`'s three injectivity refusals**, from
+      [[RECORD-A-0007]]'s 2026-08-24 amendment and *not in this task as
+      filed*: `dir` validated against `{LTR, RTL}` (`rdf.Direction` has
+      three values, so `0x03`..`0xFF` are not directions); `dir` never
+      `.None` under `0x08` (else `"x"@en` encodes two ways, which is
+      §3.2's language-tag defect exactly); `langlen` never zero. All
+      three **decoder-side** — injectivity is the format's property, and
+      the decoder is what a third party's log meets.
 - [ ] **Both directions are total and strict.** An unknown tag, a
       truncated payload, or a reference the resolver cannot answer is
       **not ok** — never a guess. That is `term_decode`'s standing
@@ -64,7 +72,11 @@ This is the layer the document describes, tested against the document.
       implementation is deterministic.
 - [ ] **The injectivity property tested**, not just argued: no term of any
       other kind encodes to the bytes a triple term does, and two
-      distinct triple terms encode distinctly.
+      distinct triple terms encode distinctly. Add the converse, which is
+      the half `RECORD-T-0021`'s re-check found sharper: **one term never
+      encodes two ways** — no `0x08` byte string decodes to a term `0x04`
+      also encodes, and a triple term whose component is an inlineable
+      literal encodes with the *inline* id and no other.
 - [ ] **`term_inline` is untouched and proven untouched.** A triple term
       is not inlineable — three ids do not fit in 28 bits — and
       `RECORD-A-0001` froze the inline predicate at first write. A test

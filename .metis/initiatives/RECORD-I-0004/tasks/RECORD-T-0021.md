@@ -4,19 +4,20 @@ level: task
 title: "The design gate: the decode seam, ownership, positions, and whether the format version moves"
 short_code: "RECORD-T-0021"
 created_at: 2026-08-24T20:42:50.593680+00:00
-updated_at: 2026-08-24T20:42:50.593680+00:00
+updated_at: 2026-08-24T21:29:56.442128+00:00
 parent: RECORD-I-0004
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/completed"
 
 
-exit_criteria_met: false
+exit_criteria_met: true
 initiative_id: RECORD-I-0004
 ---
+
 # The design gate: the decode seam, ownership, positions, and whether the format version moves
 
 ## Parent Initiative
@@ -39,7 +40,7 @@ the only decision needed at the time was whether to reserve the byte.
 
 ## Acceptance Criteria
 
-- [ ] **The decode seam decided** (`RECORD-I-0004` §5). `term_decode`'s
+- [x] **The decode seam decided** (`RECORD-I-0004` §5). `term_decode`'s
       one callback resolves a `u64` to an *IRI string* — enough for a
       datatype and a namespace, not for a triple term whose components are
       arbitrary terms and may themselves be triple terms. Two shapes to
@@ -49,14 +50,14 @@ the only decision needed at the time was whether to reserve the byte.
       snapshot-level decoder above `term_decode` that walks the recursion
       itself (keeps the pure layer's signature; puts the recursion where
       the dictionary already is).
-- [ ] **The ownership rule decided and written down.** `snapshot_term`
+- [x] **The ownership rule decided and written down.** `snapshot_term`
       **borrows** today — the arena, or a caller-provided buffer bounded
       by `INLINE_LEXICAL_MAX`. A decoded triple term must allocate an
       `^rdf.Triple` per level. The rule must not make `snapshot_term`
       *sometimes-owning by surprise*; whatever is chosen, a caller must be
       able to tell from the signature what it has to free. This is the
       sharper half of §5 and the one most likely to be regretted.
-- [ ] **Positions decided** (`RECORD-I-0004` §4): whether a triple term
+- [x] **Positions decided** (`RECORD-I-0004` §4): whether a triple term
       may occupy S, P and G or only O. The initiative leans **permit**,
       on the ground that restricting would have this store assert a
       position on a specification §11.3 itself called still-moving — and
@@ -66,7 +67,7 @@ the only decision needed at the time was whether to reserve the byte.
       naming a triple term in the subject position must still evaluate to
       no matches rather than fail, or the consumer's query engine
       inherits a hard error where an empty answer is correct.
-- [ ] **The format version decided** (`RECORD-I-0004` §6), with an ADR,
+- [x] **The format version decided** (`RECORD-I-0004` §6), with an ADR,
       because this is the first time this format has moved at all.
       Against a bump: `FORMAT_VERSION` gates the whole log
       (`encode.odin:243`), `log.md` §11 says "a format version bump means
@@ -76,16 +77,16 @@ the only decision needed at the time was whether to reserve the byte.
       cheap with no deployments; and the sibling set the precedent
       (odin-rdf-store's format v2 does not read v1 and says so). The
       initiative leans **bump**.
-- [ ] **The base-direction tag decided** (`RECORD-I-0004` §8): a new tag
+- [x] **The base-direction tag decided** (`RECORD-I-0004` §8): a new tag
       (`0x08`, `tag | langlen:u8 | dir:u8 | lang | lexical`) or a sentinel
       inside `0x04`. The lean is a **new tag** — `0x04`'s bytes stay
       byte-identical for every term already written, injectivity stays
       obvious, and the decoder stays flat.
-- [ ] **ADRs written** for whichever of these carry a decision worth
+- [x] **ADRs written** for whichever of these carry a decision worth
       citing later. The format version certainly; positions and the
       decode/ownership pair probably together, as "how a recursive term is
       decoded and who owns it".
-- [ ] **Component ids' scheme decided** — *added 2026-08-24, not in this
+- [x] **Component ids' scheme decided** — *added 2026-08-24, not in this
       task as filed*. A triple term's component may be an **inlined
       literal** (`<<( :a :b 1 )>>` is ordinary), and inlined ids are the
       one place the on-disk and resident schemes differ: flag at bit 63
@@ -93,13 +94,13 @@ the only decision needed at the time was whether to reserve the byte.
       `record/resident.odin:37`). The existing reference never exercises
       this, because a datatype is always an IRI, always a dictionary id,
       and dictionary ids are numerically identical in both schemes.
-- [ ] **`snapshot_kind`'s fall-through addressed** — *added 2026-08-24,
+- [x] **`snapshot_kind`'s fall-through addressed** — *added 2026-08-24,
       not in this task as filed*. `record/read.odin:259` returns
       `.Literal` for any tag it does not recognise, so tag `0x07` would
       report `.Literal` silently, and `snapshot_kind` is precisely the
       procedure that keeps the tag layout private from consumers — a
       wrong answer there is one no consumer can check.
-- [ ] **The injectivity argument re-checked**, not assumed.
+- [x] **The injectivity argument re-checked**, not assumed.
       `architecture.md` §3.2's argument is what makes term identity sound;
       a new tag with a fixed-length payload should extend it trivially,
       but "should" is what this task exists to convert into "does".
@@ -227,9 +228,71 @@ describe." The signal is intact, since this change is for the header's
 sake rather than the encoding's. `RECORD-T-0025`'s criterion should be
 amended to say so rather than discovered to be wrong mid-task.
 
+### 2026-08-24 — the injectivity re-check: it extends, with conditions
+
+The last criterion, done against `architecture.md` §3.2 rather than by
+analogy. **The argument extends — but not trivially, and the re-check
+earned its place: it found two decoder refusals nobody had named and one
+pre-existing gap this initiative escalates.**
+
+§3.2's argument has three moving parts, not one: a distinct tag byte; a
+payload that parses unambiguously (why a language tag is
+length-prefixed — `"en"+"US"` vs `"enUS"+""`); and canonicalisation that
+collapses spellings of the *same* term, so "the dictionary must not admit
+both". Only the first extends for free.
+
+**Tag `0x07` — extends, conditionally.** Distinct tag, fixed 25-byte
+payload; no other encoding can collide. But its injectivity **rests on
+each component id being the canonical id for its term**, which is §3.4's
+invariant: "bit 63 = 1 -> inlined term, **no dictionary entry exists**".
+See the finding below.
+
+**Tag `0x08` — needs three refusals it was not given.** Recorded as an
+amendment on [[RECORD-A-0007]] and as criteria on `RECORD-T-0022`:
+`dir` validated against `{LTR, RTL}`; `dir` never `.None` under `0x08`
+(else `"x"@en` encodes two ways — §3.2's language-tag defect verbatim);
+`langlen` never zero. The parser's own type states both mirrors as
+invariants (`../odin-rdf-parser/rdf/terms.odin:38`), which is
+corroboration from outside this repository that decision 6 and these are
+the same rule read from two ends. All three are **decoder-side**:
+injectivity is a property of the format, and the decoder is what a third
+party's log meets.
+
+### Finding: a pre-existing injectivity gap this initiative escalates
+
+**`load_term` does not enforce §3.4's invariant.** It refuses
+`.Duplicate_Term` — byte-identical encodings (`record/load.odin:110`) —
+and nothing else. A chain-perfect, verifier-clean log may therefore
+define `0x05 | xsd:integer | "1"` as a dictionary term, giving one
+abstract term two ids: the inline id the writer would have used, and
+this one. The writer never produces such a log (`intern_term` tries
+`term_inline` first; `snapshot_resolve` likewise), so this is about logs
+this store did not write — which is the population the format exists to
+be checkable by.
+
+- **Today it is a fact-level defect.** Two facts about "the same" literal
+  hold different ids and do not unify. Latent, and pre-existing.
+- **With triple terms it becomes a dictionary-level one.** The ambiguity
+  is baked into another term's bytes, so two distinct `0x07` encodings —
+  and therefore two dictionary ids — denote one abstract triple term. A
+  silent term *split*, the inverse of the silent merge §3.2's hashed-key
+  path takes trouble to prevent.
+
+**Not fixed here, and deliberately so:** the fix is a new refusal on the
+replay path, which is neither of this initiative's two tags and would put
+a term-decode on replay's hot path (it is only cheap if narrowed to the
+shapes that can inline — tag `0x05` whose datatype resolves to
+`xsd:integer` or `xsd:date`, and the boolean forms). It is the owner's
+call whether it belongs in `RECORD-T-0023`, which already touches the
+replay path's ordering assert, or in the backlog. `RECORD-T-0022` covers
+the half that is this initiative's: a triple term whose component is
+inlineable must encode with the inline id and no other.
+
 ### What the downstream tasks inherit
 
-- `RECORD-T-0022`: both tag layouts are fixed above; the encoder resolves
+- `RECORD-T-0022`: two criteria added by the re-check — `0x08`'s three
+  refusals, and the injectivity test's converse half (one term never
+  encodes two ways). Both tag layouts are fixed above; the encoder resolves
   components through a disk-form sibling of `Resolve_Datatype`;
   `term_decode` grows the `nil`-defaulted `Resolve_Term`;
   `FORMAT_VERSION` moves to 2 in the same task as the header check and
