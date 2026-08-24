@@ -169,12 +169,53 @@ Optimized build, Apple Silicon dev machine, corpora regenerated at v2:
 `RECORD-T-0006` recorded verify 105–272 ms and replay 166–342 ms over
 16.9–38.4 MB. **These are not the same measurement and should not be read
 as a speedup**: that range spanned machines and runs, and nothing in this
-initiative touches the verify or replay hot path. What the numbers support
-is the claim that matters — the recursive intern and the wider dictionary
-did not move them, and the vision's sub-second criterion holds with an
-order of magnitude in hand. Commit latency at 4×10⁵ facts is 34.6–50.3 ms,
-within `RECORD-A-0005`'s recorded 31–35 ms band's neighbourhood and well
-under its review trigger; resident footprint is unchanged at 21.2 MB.
+initiative touches the verify or replay hot path. The vision's sub-second
+criterion holds with an order of magnitude in hand, and the resident
+footprint is unchanged at 21.2 MB.
+
+### Amended the same day — the regression question, measured A/B
+
+The paragraph above compares against *recorded* figures from other
+machines and other days, which cannot answer "did this initiative make
+anything slower". Two numbers looked like they might have moved — bulk
+apply against `RECORD-T-0018`'s 222–267 ms, and commit latency against
+`RECORD-A-0005`'s 31–35 ms — so both were measured **A/B on one machine,
+back to back**: a worktree at `43ed124` (the commit before this
+initiative) against `77982ce`, seven optimized runs each.
+
+| | baseline (43ed124) | post (77982ce) |
+|---|---|---|
+| bulk apply, one epoch | min 382, median 393, **mean 401**, max 432 ms | min 381, median 420, **mean 410**, max 450 ms |
+| commit latency, mean of 24 | min 35.8, **mean 35.9**, max 36.4 ms | min 35.4, **mean 36.0**, max 36.4 ms |
+| verify / replay | 48–64 / 56–64 ms bulk-loaded | 50–55 / 56–65 ms bulk-loaded |
+
+**No regression is detectable.** Commit latency is flat to three
+significant figures (+0.08%). Bulk apply's means differ by **+2.1%**,
+inside a run-to-run spread of **13–18%** on this machine — the two
+distributions overlap almost completely (baseline min 382 / max 432, post
+min 381 / max 450). At n=7 with that variance, +2% is not a measurement.
+
+What it is not is a proof of *zero* cost. There is a plausible mechanism
+for a small one: `term_order_ok` is an `assert` on the write path, so it
+runs on **every new dictionary term** — 50,494 of them in the bulk-apply
+corpus — and `load_term`'s refusal runs on every term on the replay path.
+Both are one switch and up to three comparisons. If that costs anything it
+is below this harness's noise floor, and the harness would need a tighter
+benchmark than `tests/scale` to see it. Recorded as a known, unmeasured
+cost rather than claimed to be nothing.
+
+**A separate finding, and it is not this initiative's.** Today's bulk
+apply is ~400 ms against `RECORD-T-0018`'s recorded **222–267 ms**, and
+today's commit latency ~36 ms against `RECORD-A-0005`'s recorded
+**31–35 ms**. The baseline commit measures the same as the post commit on
+both, so **the drift from those recorded figures predates
+`RECORD-I-0004` entirely** — it happened somewhere between `RECORD-T-0018`
+and `43ed124`, or it is this machine differing from the one that recorded
+them. Either way the repository's recorded numbers no longer describe this
+machine, which is worth someone's attention: `RECORD-A-0005`'s review
+trigger is phrased against the 31–35 ms band, and a band that no longer
+reproduces is a trigger that cannot fire honestly. Filed here rather than
+chased, because chasing it is not this initiative's scope.
 
 ### The documents, amended and not rewritten
 
