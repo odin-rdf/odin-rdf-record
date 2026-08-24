@@ -915,3 +915,106 @@ test_apply_triple_terms :: proc(t: ^testing.T) {
 	defer store_close(&s2)
 	same_projection(t, &s, &s2)
 }
+
+
+@(test)
+test_read_rdf12_terms :: proc(t: ^testing.T) {
+	// RECORD-T-0024: the read surface over RDF 1.2's two term kinds —
+	// kind without decoding, components without allocating, the whole
+	// term at the answer boundary, and one verb that frees whatever
+	// came back.
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
+	s: Store
+	at_open(t, &s, mem_file_ops(&fs))
+	defer store_close(&s)
+
+	alice, knows := iri("http://ex/alice"), iri("http://ex/knows")
+	dir := rdf.Literal{lexical = "Wort", datatype = rdf.RDF_DIR_LANG_STRING, language = "de-CH", direction = .LTR}
+	inner := rdf.Triple{alice, knows, rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}}
+	outer := rdf.Triple{alice, knows, &inner}
+	ops := [3]Op{
+		op(.Assert, alice, knows, dir),
+		op(.Assert, alice, knows, &inner),
+		op(.Assert, alice, knows, &outer),
+	}
+	_, _, err := apply(&s, {ops = ops[:]})
+	testing.expect_value(t, err, Apply_Error{})
+
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+
+	// Resolution, for both kinds.
+	dir_id, dok := snapshot_resolve(snap, dir)
+	inner_id, iok := snapshot_resolve(snap, &inner)
+	outer_id, ook := snapshot_resolve(snap, &outer)
+	testing.expect(t, dok && iok && ook, "both new kinds resolve")
+
+	// Kind, without decoding.
+	testing.expect_value(t, snapshot_kind(snap, dir_id), Term_Kind.Literal)
+	testing.expect_value(t, snapshot_kind(snap, inner_id), Term_Kind.Triple)
+	testing.expect_value(t, snapshot_kind(snap, outer_id), Term_Kind.Triple)
+	testing.expect_value(t, snapshot_kind(snap, term_id(t, snap, alice)), Term_Kind.IRI)
+
+	// Components, without allocating or decoding — the consumer's
+	// Triple_Reader against this encoding.
+	parts, pok := snapshot_triple_parts(snap, outer_id)
+	testing.expect(t, pok, "a triple term's parts read back")
+	testing.expect_value(t, parts[0], term_id(t, snap, alice))
+	testing.expect_value(t, parts[2], inner_id)
+	inner_parts, ipok := snapshot_triple_parts(snap, inner_id)
+	testing.expect(t, ipok, "and recursively, one level at a time")
+	five, _ := term_inline(rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER})
+	testing.expect_value(t, inner_parts[2], five)
+	testing.expect(t, inner_parts[2] & RES_INLINE_FLAG != 0, "an inlined component comes back as an inlined id")
+
+	// Not a triple term, and not a term at all: false, never a guess.
+	_, nok := snapshot_triple_parts(snap, dir_id)
+	testing.expect(t, !nok, "a literal has no parts")
+	_, iiok := snapshot_triple_parts(snap, five)
+	testing.expect(t, !iiok, "an inlined id has no parts")
+
+	// The whole term, at the answer boundary, and freed with one verb.
+	buf: [INLINE_LEXICAL_MAX]byte
+	dt, dtok := snapshot_term(snap, dir_id, buf[:])
+	// The language tag comes back folded, tag 0x08 applying tag 0x04's
+	// rule — "de-CH" and "de-ch" are one term, so the canonical spelling
+	// is what the store holds and what it answers with.
+	folded := rdf.Literal{lexical = "Wort", datatype = rdf.RDF_DIR_LANG_STRING, language = "de-ch", direction = .LTR}
+	testing.expect(t, dtok && dt == rdf.Term(folded), "a base-direction literal decodes, direction and all")
+	snapshot_term_destroy(snap, dir_id, dt)
+
+	ot, otok := snapshot_term(snap, outer_id, buf[:])
+	testing.expect(t, otok, "a triple term decodes")
+	tr := ot.(^rdf.Triple)
+	testing.expect(t, tr.subject == rdf.Term(alice), "its subject")
+	nested := tr.object.(^rdf.Triple)
+	testing.expect(t, nested.object == rdf.Term(rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}), "and its nested inlined component")
+	snapshot_term_destroy(snap, outer_id, ot)
+
+	// A pattern binding a triple term's id matches the facts carrying
+	// it — layer 1 binds ids and a triple term is an id, which is the
+	// claim RECORD-I-0004's non-goals make.
+	testing.expect(t, snapshot_exists(snap, {o = outer_id}, {origin = .Any}), "a pattern binds a triple term")
+	n := 0
+	sc := range_iter(snapshot_match(snap, {o = inner_id}), {origin = .Any})
+	for _ in scan_next(&sc) {
+		n += 1
+	}
+	testing.expect_value(t, n, 1)
+
+	// The term index is unaffected: it sorts encoded bytes and treats
+	// them opaquely, so every term of this snapshot — the new kinds
+	// among them — is found by its own encoding.
+	for id in Term_ID(1) ..= Term_ID(snap.idx.n_terms) {
+		found, fok := term_index_find(snap.idx, snapshot_bytes(snap, id))
+		testing.expect(t, fok && found == id, "every term is found by its encoding, new tags included")
+	}
+}
+
+@(private = "file")
+term_id :: proc(t: ^testing.T, snap: Snapshot, term: rdf.Term) -> Term_ID {
+	id, ok := snapshot_resolve(snap, term)
+	testing.expect(t, ok, "the term resolves")
+	return id
+}

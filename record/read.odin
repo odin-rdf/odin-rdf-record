@@ -12,6 +12,8 @@
 // snapshot_bytes are arena views, valid for the life of the store.
 package record
 
+import "base:runtime"
+
 import "core:sync"
 
 import "rdf:rdf"
@@ -238,12 +240,15 @@ snapshot_find :: proc(snap: Snapshot, enc: []byte) -> (id: Term_ID, ok: bool) {
 	return term_index_find(snap.idx, enc)
 }
 
-// Term_Kind is what snapshot_kind answers: the three kinds of RDF term
-// this store can hold, with no reference to how they are encoded.
+// Term_Kind is what snapshot_kind answers: the kinds of RDF term this
+// store can hold, with no reference to how they are encoded. Triple
+// arrived with RDF 1.2 (RECORD-I-0004) and is the direct replacement
+// for odin-rdf-store's id_kind(id) == .Triple.
 Term_Kind :: enum u8 {
 	IRI,
 	Blank,
 	Literal,
+	Triple,
 }
 
 // snapshot_kind reports a resident id's kind without decoding it —
@@ -260,13 +265,54 @@ snapshot_kind :: proc(snap: Snapshot, id: Term_ID) -> Term_Kind {
 		return .Literal
 	}
 	assert(id != 0 && u32(id) <= snap.idx.n_terms, "snapshot_kind: not a term of this snapshot")
+	// Every tag named, and an unrecognised one panics rather than
+	// answers (RECORD-T-0021 decision 8). The arm this replaces fell
+	// through to .Literal, which was right for every tag that existed
+	// and would have been silently wrong for 0x07 — and silently wrong
+	// in the one procedure whose whole job is to keep the tag layout
+	// private, so no consumer could have checked it.
 	switch set_bytes(snap.idx, id)[0] {
 	case TERM_TAG_IRI, TERM_TAG_SPLIT_IRI:
 		return .IRI
 	case TERM_TAG_BLANK:
 		return .Blank
+	case TERM_TAG_STRING, TERM_TAG_LANG, TERM_TAG_TYPED, TERM_TAG_DIR_LANG:
+		return .Literal
+	case TERM_TAG_TRIPLE:
+		return .Triple
 	}
-	return .Literal
+	panic("snapshot_kind: a term encoding with a tag this store does not define")
+}
+
+// snapshot_triple_parts reads a triple term's three components as
+// resident ids — a tag check and three reads out of the arena, with no
+// allocation, no decode and no recursion (RECORD-I-0004 par. 7). This is
+// the cheap path: a query engine taking a triple term apart wants the
+// *ids*, and materializing the term to re-resolve its parts is what
+// odin-rdf-store had to do (odin-rdf-sparql's SPARQL-T-0019). The
+// components are in the encoding, so they are simply there.
+//
+// Published rather than left to consumers on purpose: parsing the
+// encoding by hand is exactly what a published API exists to prevent.
+// Not ok for an inlined id or any term that is not a triple term;
+// asserts on an id this snapshot does not know, as snapshot_bytes does.
+snapshot_triple_parts :: proc(snap: Snapshot, id: Term_ID) -> (parts: [3]Term_ID, ok: bool) {
+	assert(snap.idx != nil, "snapshot_triple_parts: a released snapshot")
+	if id & RES_INLINE_FLAG != 0 {
+		return parts, false // an inlined literal is never a triple term
+	}
+	assert(id != 0 && u32(id) <= snap.idx.n_terms, "snapshot_triple_parts: not a term of this snapshot")
+	enc := set_bytes(snap.idx, id)
+	if len(enc) != 1+TERM_TRIPLE_PAYLOAD || enc[0] != TERM_TAG_TRIPLE {
+		return parts, false
+	}
+	// The arena holds the log's bytes, so the ids in it are on-disk
+	// ids; resident_id is the re-tag, and it is the identity for every
+	// dictionary id (RECORD-A-0008 decision 3).
+	for i in 0 ..< 3 {
+		parts[i] = resident_id(get_u64(enc[1+i*8:]))
+	}
+	return parts, true
 }
 
 // snapshot_exists answers whether any fact matches — api.md par. 12.5's
@@ -291,10 +337,23 @@ snapshot_bytes :: proc(snap: Snapshot, id: Term_ID) -> []byte {
 
 // snapshot_term materializes a resident id as a data-model term — the
 // codec's second consumer, as RECORD-T-0005 named it. A dictionary id
-// decodes from its arena bytes, borrowing them (a split IRI joins in
-// one allocation); an inlined id materializes into the caller's
-// buffer, at least INLINE_LEXICAL_MAX bytes, and borrows that. Not ok
-// for id 0, an id past the snapshot, or bytes the codec refuses.
+// decodes from its arena bytes, borrowing them; an inlined id
+// materializes into the caller's buffer, at least INLINE_LEXICAL_MAX
+// bytes, and borrows that. Not ok for id 0, an id past the snapshot, or
+// bytes the codec refuses.
+//
+// **Two kinds own instead of borrowing, and snapshot_term_destroy is
+// how a caller frees them without having to know which** — call it on
+// whatever comes back and it is a no-op for the borrowing kinds. A
+// split IRI joins its namespace and local name in one allocation (it
+// always has; the verb is new). A **triple term is wholly owned**,
+// every component allocated from `allocator`, so nothing in it dies
+// with the store and rdf.destroy_term frees it exactly
+// (RECORD-A-0008 decision 2).
+//
+// A query engine on the hot path should not be here at all: taking a
+// triple term apart is snapshot_triple_parts, which allocates nothing.
+// This is the answer boundary.
 snapshot_term :: proc(
 	snap: Snapshot,
 	id: Term_ID,
@@ -312,7 +371,34 @@ snapshot_term :: proc(
 		return nil, false
 	}
 	snap := snap
-	return term_decode(set_bytes(snap.idx, id), resolve_snap_iri, &snap, allocator = allocator)
+	return term_decode(set_bytes(snap.idx, id), resolve_snap_iri, &snap, resolve_snap_term, allocator)
+}
+
+// snapshot_term_destroy frees what snapshot_term returned, and is total
+// over every kind it can return: nothing for the borrowing kinds, the
+// joined string for a split IRI, the whole tree for a triple term. The
+// id is a parameter because that is what says which case this is — the
+// term alone cannot tell a joined IRI from one borrowed out of the
+// arena, and guessing from a pointer's address would be a worse kind of
+// clever.
+//
+// It is safe to call on anything snapshot_term produced, including the
+// results it refused (a nil term frees nothing), which is what lets a
+// caller pair it with every call rather than only some.
+snapshot_term_destroy :: proc(snap: Snapshot, id: Term_ID, t: rdf.Term, allocator := context.allocator) {
+	if t == nil || id & RES_INLINE_FLAG != 0 || id == 0 {
+		return
+	}
+	assert(snap.idx != nil, "snapshot_term_destroy: a released snapshot")
+	if u32(id) > snap.idx.n_terms {
+		return
+	}
+	switch set_bytes(snap.idx, id)[0] {
+	case TERM_TAG_SPLIT_IRI:
+		delete(string(t.(rdf.IRI)), allocator)
+	case TERM_TAG_TRIPLE:
+		rdf.destroy_term(t, allocator)
+	}
 }
 
 // --- order selection -------------------------------------------------
@@ -422,6 +508,46 @@ resolve_snap_component :: proc(data: rawptr, t: rdf.Term) -> (id: u64, ok: bool)
 		return 0, false
 	}
 	return disk_id(rid), true
+}
+
+// resolve_snap_term is the codec's Resolve_Term over a snapshot: a
+// triple term's component, materialized and **owned**, because the
+// decoded tree owns everything in it. The id arrives in on-disk form,
+// straight out of the encoding.
+//
+// The clone is what makes ownership uniform, and it is deliberate
+// waste on a path api.md par. 12.7 does not put on anyone's hot loop:
+// an inlined literal materializes with a *static* datatype IRI that
+// must not be freed, and an arena-borrowed term must not be freed
+// either, so both are copied rather than have the tree hold a mixture
+// a caller could not free with one verb. A component that is itself a
+// triple term is already owned and passes straight through.
+@(private = "file")
+resolve_snap_term :: proc(data: rawptr, id: u64, allocator: runtime.Allocator) -> (t: rdf.Term, ok: bool) {
+	snap := (^Snapshot)(data)
+	if id & INLINE_FLAG != 0 {
+		buf: [INLINE_LEXICAL_MAX]byte
+		lit, lok := inline_term(id, buf[:])
+		if !lok {
+			return nil, false
+		}
+		return rdf.clone_term(lit, allocator), true
+	}
+	if id == 0 || id > u64(snap.idx.n_terms) {
+		return nil, false
+	}
+	rid := Term_ID(id)
+	buf: [INLINE_LEXICAL_MAX]byte
+	borrowed, bok := snapshot_term(snap^, rid, buf[:], allocator)
+	if !bok {
+		return nil, false
+	}
+	if _, is_triple := borrowed.(^rdf.Triple); is_triple {
+		return borrowed, true // already wholly owned; nothing to copy
+	}
+	owned := rdf.clone_term(borrowed, allocator)
+	snapshot_term_destroy(snap^, rid, borrowed, allocator)
+	return owned, true
 }
 
 // resolve_snap_iri is the codec's Resolve_Iri over a snapshot: the id

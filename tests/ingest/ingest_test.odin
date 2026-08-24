@@ -74,13 +74,62 @@ exists :: proc(s: ^rec.Store, epoch: rec.Epoch, q: rdf.Quad) -> bool {
 	return rec.snapshot_exists(snap, p, {origin = .Any})
 }
 
+// term_has_blank recurses into a triple term (RECORD-T-0024). RDF 1.2's
+// reifying syntax puts blank nodes inside them, and a document whose
+// only blank nodes are there would otherwise be taken for ground and
+// compared label for label against a result that names them differently.
+// Carried names what the rdf12 sweep counts: the two term kinds
+// RECORD-I-0004 built, so the log line can say the suite exercised them
+// rather than merely ran.
+@(private = "file")
+Carried :: enum {
+	Triple,
+	Dir_Lang,
+}
+
+@(private = "file")
+ops_carry :: proc(ops: []rec.Op, what: Carried) -> bool {
+	for op in ops {
+		if term_carries(op.subject, what) || term_carries(op.object, what) {
+			return true
+		}
+	}
+	return false
+}
+
+@(private = "file")
+term_carries :: proc(t: rdf.Term, what: Carried) -> bool {
+	switch v in t {
+	case rdf.Literal:
+		return what == .Dir_Lang && v.direction != .None
+	case ^rdf.Triple:
+		if what == .Triple {
+			return true
+		}
+		return term_carries(v.subject, what) || term_carries(v.predicate, what) || term_carries(v.object, what)
+	case rdf.IRI, rdf.Blank_Node:
+		return false
+	}
+	return false
+}
+
+@(private)
+term_has_blank :: proc(t: rdf.Term) -> bool {
+	switch v in t {
+	case rdf.Blank_Node:
+		return true
+	case ^rdf.Triple:
+		return term_has_blank(v.subject) || term_has_blank(v.predicate) || term_has_blank(v.object)
+	case rdf.IRI, rdf.Literal:
+		return false
+	}
+	return false
+}
+
 @(private)
 has_blank :: proc(ops: []rec.Op) -> bool {
 	for op in ops {
-		if _, b := op.subject.(rdf.Blank_Node); b {
-			return true
-		}
-		if _, b := op.object.(rdf.Blank_Node); b {
+		if term_has_blank(op.subject) || term_has_blank(op.object) {
 			return true
 		}
 		if _, b := op.graph.(rdf.Blank_Node); b {
@@ -115,7 +164,7 @@ Suite :: struct {
 // other); every document without a sibling is a syntax test, positive
 // unless its name says bad, in which case the error carries a position.
 @(private)
-sweep_suite :: proc(t: ^testing.T, su: Suite) -> (pairs, ground, syntax_ok, syntax_bad: int) {
+sweep_suite :: proc(t: ^testing.T, su: Suite) -> (pairs, ground, syntax_ok, syntax_bad, applied, triples, dirs: int) {
 	entries, derr := os.read_all_directory_by_path(su.dir, context.allocator)
 	testing.expectf(t, derr == nil, "%s lists", su.dir)
 	defer os.file_info_slice_delete(entries, context.allocator)
@@ -172,7 +221,36 @@ sweep_suite :: proc(t: ^testing.T, su: Suite) -> (pairs, ground, syntax_ok, synt
 		testing.expectf(t, rerr.kind == .None, "%s: the result ingests, got %v", e.name, rerr)
 		testing.expectf(t, len(ops) == len(rops), "%s: %d ops from the document, %d from the result", e.name, len(ops), len(rops))
 		pairs += 1
-		if has_blank(ops) || has_blank(rops) || len(ops) == 0 {
+		if ops_carry(ops, .Triple) {
+			triples += 1
+		}
+		if ops_carry(ops, .Dir_Lang) {
+			dirs += 1
+		}
+		if len(ops) == 0 {
+			continue
+		}
+		// Every document commits, ground or not (RECORD-T-0024). The
+		// ground check below needs blank-node-free documents because it
+		// compares labels; *applying* one needs nothing of the sort, and
+		// a triple term reaching apply is the point of the rdf12 sweep —
+		// most of those documents carry a blank-node reifier, so gating
+		// apply on groundness would have swept straight past the
+		// capability this initiative built.
+		{
+			one_fs: rec.Mem_FS
+			defer rec.mem_fs_destroy(&one_fs)
+			one: rec.Store
+			open_mem(t, &one, &one_fs)
+			defer rec.store_close(&one)
+			for op in ops {
+				single := [1]rec.Op{op}
+				_, _, aerr := rec.apply(&one, {ops = single[:]})
+				testing.expectf(t, aerr.kind == .None || aerr.kind == .Already_Live, "%s: apply %v", e.name, aerr)
+			}
+			applied += 1
+		}
+		if has_blank(ops) || has_blank(rops) {
 			continue
 		}
 		// Ground documents: the same statements, as a set. Two stores,
@@ -206,16 +284,126 @@ sweep_suite :: proc(t: ^testing.T, su: Suite) -> (pairs, ground, syntax_ok, synt
 
 @(test)
 test_ingest_w3c_turtle :: proc(t: ^testing.T) {
-	pairs, ground, ok, bad := sweep_suite(t, {dir = W3C + "/rdf11-turtle", doc_ext = ".ttl", res_ext = ".nt", base = "https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-turtle/"})
+	pairs, ground, ok, bad, _, _, _ := sweep_suite(t, {dir = W3C + "/rdf11-turtle", doc_ext = ".ttl", res_ext = ".nt", base = "https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-turtle/"})
 	log.infof("rdf11-turtle: %d eval pairs (%d ground, compared as sets), %d positive and %d negative syntax documents", pairs, ground, ok, bad)
 	testing.expectf(t, pairs > 100 && ground > 50 && ok > 50 && bad > 50, "the suite was swept: %d eval pairs (%d ground), %d positive and %d negative syntax", pairs, ground, ok, bad)
 }
 
 @(test)
 test_ingest_w3c_trig :: proc(t: ^testing.T) {
-	pairs, ground, ok, bad := sweep_suite(t, {dir = W3C + "/rdf11-trig", doc_ext = ".trig", res_ext = ".nq", base = "https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-trig/", quads = true})
+	pairs, ground, ok, bad, _, _, _ := sweep_suite(t, {dir = W3C + "/rdf11-trig", doc_ext = ".trig", res_ext = ".nq", base = "https://w3c.github.io/rdf-tests/rdf/rdf11/rdf-trig/", quads = true})
 	log.infof("rdf11-trig: %d eval pairs (%d ground, compared as sets), %d positive and %d negative syntax documents", pairs, ground, ok, bad)
 	testing.expectf(t, pairs > 100 && ground > 50 && ok > 50 && bad > 50, "the suite was swept: %d eval pairs (%d ground), %d positive and %d negative syntax", pairs, ground, ok, bad)
+}
+
+@(test)
+test_ingest_w3c_rdf12_turtle :: proc(t: ^testing.T) {
+	// RECORD-T-0024's real verdict: the same end-to-end sweep the rdf11
+	// suites get — ingest, apply, read back, compare against the suite's
+	// own expected result — over documents carrying RDF 1.2's triple
+	// terms. No vendoring; the bases are odin-rdf-parser's own harness's
+	// (tests/w3c/harness/harness_test.odin), which carry a trailing
+	// eval/ the rdf11 pattern does not.
+	pairs, ground, ok, bad, applied, triples, dirs := sweep_suite(t, {dir = W3C + "/rdf12-turtle-eval", doc_ext = ".ttl", res_ext = ".nt", base = "https://w3c.github.io/rdf-tests/rdf/rdf12/rdf-turtle/eval/"})
+	log.infof(
+		"rdf12-turtle-eval: %d eval pairs (%d ground, compared as sets), %d applied, %d carrying a triple term, %d a base direction; %d positive and %d negative syntax documents",
+		pairs, ground, applied, triples, dirs, ok, bad,
+	)
+	// 29 is odin-rdf-parser's own harness's pinned entry count for this
+	// suite, and the counts below say the sweep exercised what this
+	// initiative built rather than merely walking past it.
+	testing.expectf(t, pairs >= 29, "the suite was swept: %d eval pairs (%d ground), %d positive and %d negative syntax", pairs, ground, ok, bad)
+	testing.expectf(t, triples > 0 && applied >= pairs, "%d of %d documents carried a triple term, %d applied", triples, pairs, applied)
+}
+
+@(test)
+test_ingest_w3c_rdf12_trig :: proc(t: ^testing.T) {
+	pairs, ground, ok, bad, applied, triples, dirs := sweep_suite(t, {dir = W3C + "/rdf12-trig-eval", doc_ext = ".trig", res_ext = ".nq", base = "https://w3c.github.io/rdf-tests/rdf/rdf12/rdf-trig/eval/", quads = true})
+	log.infof(
+		"rdf12-trig-eval: %d eval pairs (%d ground, compared as sets), %d applied, %d carrying a triple term, %d a base direction; %d positive and %d negative syntax documents",
+		pairs, ground, applied, triples, dirs, ok, bad,
+	)
+	testing.expectf(t, pairs >= 25, "the suite was swept: %d eval pairs (%d ground), %d positive and %d negative syntax", pairs, ground, ok, bad)
+	testing.expectf(t, triples > 0 && applied >= pairs, "%d of %d documents carried a triple term, %d applied", triples, pairs, applied)
+}
+
+@(test)
+test_ingest_w3c_rdf12_base_direction :: proc(t: ^testing.T) {
+	// Base direction has no W3C *eval* directory — it is a syntax suite
+	// everywhere, which is exactly what RECORD-I-0004 said when it called
+	// this half "a latent limit removed rather than an evaluation
+	// directory unblocked". The rdf12 eval sweep therefore reports zero
+	// base-direction documents, and that number is honest rather than a
+	// gap: these eight are where the vendored suites keep them.
+	//
+	// Parse-only upstream; here they ingest, apply and resolve, so the
+	// term kind is exercised against W3C documents rather than only
+	// against this repository's own fixtures.
+	Doc :: struct {
+		path:  string,
+		lines: bool, // an N-Triples/N-Quads document rather than turtle/trig
+		quads: bool,
+	}
+	docs := [8]Doc {
+		{W3C + "/rdf12-turtle-syntax/nt-ttl12-langdir-1.ttl", false, false},
+		{W3C + "/rdf12-turtle-syntax/nt-ttl12-langdir-2.ttl", false, false},
+		{W3C + "/rdf12-trig-syntax/trig12-base-1.trig", false, true},
+		{W3C + "/rdf12-trig-syntax/trig12-base-2.trig", false, true},
+		{W3C + "/rdf12-ntriples-syntax/ntriples-langdir-1.nt", true, false},
+		{W3C + "/rdf12-ntriples-syntax/ntriples-langdir-2.nt", true, false},
+		{W3C + "/rdf12-nquads-syntax/nquads-langdir-1.nq", true, true},
+		{W3C + "/rdf12-nquads-syntax/nquads-langdir-2.nq", true, true},
+	}
+	directed := 0
+	for d in docs {
+		doc := read(t, d.path)
+		defer delete(doc)
+		ops: []rec.Op
+		err: ingest.Error
+		switch {
+		case d.lines && d.quads:
+			ops, err = ingest.nquads(doc, context.allocator)
+		case d.lines:
+			ops, err = ingest.ntriples(doc, nil, context.allocator)
+		case d.quads:
+			ops, err = ingest.trig(doc, context.allocator, base = "http://example/")
+		case:
+			ops, err = ingest.turtle(doc, nil, context.allocator, base = "http://example/")
+		}
+		defer ingest.ops_destroy(ops, context.allocator)
+		testing.expectf(t, err.kind == .None, "%s: ingests, got %v", d.path, err)
+		if !ops_carry(ops, .Dir_Lang) {
+			continue
+		}
+		directed += 1
+
+		fs: rec.Mem_FS
+		defer rec.mem_fs_destroy(&fs)
+		st: rec.Store
+		open_mem(t, &st, &fs)
+		defer rec.store_close(&st)
+		for op in ops {
+			one := [1]rec.Op{op}
+			_, _, aerr := rec.apply(&st, {ops = one[:]})
+			testing.expectf(t, aerr.kind == .None || aerr.kind == .Already_Live, "%s: apply %v", d.path, aerr)
+		}
+		// Every directional literal in the document is a term of the
+		// store afterwards — resolvable, and a literal to snapshot_kind.
+		snap, serr := rec.store_latest(&st)
+		testing.expect_value(t, serr, rec.Snapshot_Error.None)
+		defer rec.snapshot_release(&snap)
+		for op in ops {
+			lit, is_lit := op.object.(rdf.Literal)
+			if !is_lit || lit.direction == .None {
+				continue
+			}
+			id, found := rec.snapshot_resolve(snap, lit)
+			testing.expectf(t, found, "%s: a directional literal resolves", d.path)
+			testing.expect_value(t, rec.snapshot_kind(snap, id), rec.Term_Kind.Literal)
+		}
+	}
+	log.infof("rdf12 base direction: %d of %d vendored documents carry a directional literal, all applied", directed, len(docs))
+	testing.expectf(t, directed == len(docs), "every listed document carries one: %d of %d", directed, len(docs))
 }
 
 @(test)

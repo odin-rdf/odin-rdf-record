@@ -468,3 +468,4 @@ test_read_bytes_and_term :: proc(t: ^testing.T) {
 	_, past_ok := snapshot_term(snap, Term_ID(rt.terms)+1, buf[:])
 	testing.expect(t, !past_ok, "an id past the snapshot is unknown")
 }
+
