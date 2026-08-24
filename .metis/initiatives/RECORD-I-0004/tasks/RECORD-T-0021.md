@@ -126,6 +126,34 @@ recursion is.
 
 None. First task of the initiative, and the gate the other four wait on.
 
+### A consumer concern this gate should know about, unmeasured
+
+**Not part of this task's scope, and not a request** — recorded here
+because this is the gate that is open, and because `RECORD-A-0004` is the
+ADR in question.
+
+odin-rdf-sparql's port (`SPARQL-I-0003` §12) has identified one cost it
+will inherit from this store: **six orders with `G` as the residual
+tiebreaker and no graph-first permutation** mean a bound graph never
+enters a prefix, so SPARQL's `GRAPH <g> { ?s ?p ?o }` becomes a scan of
+the fact table with a per-fact residual check, where odin-rdf-store —
+whose every index was graph-first — answered it as one prefix range.
+`GRAPH` is a first-class SPARQL operator, and the family's deployment
+shape is ~200 processes per machine.
+
+**There are no numbers yet**, deliberately: that repository had no
+benchmark at all, and is building one on both sides of its port
+(`SPARQL-T-0040` before, `SPARQL-T-0036` after) precisely so the finding
+arrives as evidence rather than arithmetic. The measured version will be
+filed on this repository's backlog by `SPARQL-T-0039`, under the family's
+"capability gaps become evidence, not workarounds" convention.
+
+So: **nothing here is asked of this initiative**, whose scope is term
+encoding and which should not widen. The only reason it is written down
+now is that a design gate deciding what this format looks like is a
+cheaper place to *know* about it than an ADR reopened later. If the gate
+concludes it changes nothing, that is the expected outcome.
+
 ### Risk Considerations
 
 **This task's output is decisions, and a wrong one is expensive later**

@@ -16,18 +16,30 @@
 // dictionary.
 package record
 
+import "base:runtime"
+
 import "core:fmt"
 
 import "rdf:rdf"
 
 // Term encoding tags, architecture.md par. 3.2 — with 0x06 from
-// par. 3.5 and 0x07 reserved for RDF 1.2 triple terms (par. 11.3).
+// par. 3.5, and 0x07 and 0x08 for RDF 1.2's two term kinds
+// (RECORD-I-0004). 0x07 is the byte par. 11.3 reserved, in the layout
+// it specified; 0x08 had no reservation and is chosen in RECORD-A-0007.
 TERM_TAG_IRI :: u8(0x01)
 TERM_TAG_BLANK :: u8(0x02)
 TERM_TAG_STRING :: u8(0x03)
 TERM_TAG_LANG :: u8(0x04)
 TERM_TAG_TYPED :: u8(0x05)
 TERM_TAG_SPLIT_IRI :: u8(0x06)
+TERM_TAG_TRIPLE :: u8(0x07)
+TERM_TAG_DIR_LANG :: u8(0x08)
+
+// TERM_TRIPLE_PAYLOAD is a triple term's payload width: three on-disk
+// component ids, par. 11.3. Fixed, and checked exactly — a tolerated
+// tail would be a second encoding of one term, which is par. 3.2's
+// injectivity gone.
+TERM_TRIPLE_PAYLOAD :: 3 * 8
 
 // XSD_DATE is xsd:date, the datatype of inlined dates; the parser's
 // vocabulary carries the datatypes its grammars need and this is not
@@ -45,16 +57,37 @@ INLINE_LEXICAL_MAX :: 16
 // when the id is unknown or does not name an IRI.
 Resolve_Iri :: proc(data: rawptr, id: u64) -> (iri: string, ok: bool)
 
+// Resolve_Term resolves a dictionary or inlined id to the term it
+// names — the callback term_decode needs for a triple term's three
+// components, which are arbitrary terms and may themselves be triple
+// terms (RECORD-A-0008 decision 1). Its answer must be allocated from
+// `allocator` and is owned by the caller: a decoded triple term is
+// wholly owned, so that the parser's rdf.destroy_term — which for a
+// ^rdf.Triple deep frees every component string and then the node
+// itself — is exactly right rather than catastrophic. Note the verb:
+// rdf.destroy_triple takes a Triple by value and leaves the node,
+// so a decoded triple term is freed with rdf.destroy_term. It must fail rather than guess on an id it does
+// not know.
+//
+// nil is a legal resolver and refuses every triple term, which is what
+// a caller holding no dictionary wants and what this codec did before
+// RECORD-I-0004.
+Resolve_Term :: proc(data: rawptr, id: u64, allocator: runtime.Allocator) -> (t: rdf.Term, ok: bool)
+
 // term_decode decodes one canonical term encoding into the data model.
-// The returned term borrows from `enc` except for a split IRI, whose
-// namespace and local name are joined in one allocation from
-// `allocator`. Decoding is strict: an unknown tag, a truncated
-// payload, or a reference the resolver cannot answer is not ok —
-// never a guess, for the same reason an unknown record kind halts.
+// The returned term borrows from `enc`, with two exceptions that own
+// and must be freed: a split IRI, whose namespace and local name are
+// joined in one allocation from `allocator`, and a **triple term,
+// which is wholly owned** — every component owned by `allocator`, so
+// rdf.destroy_term frees it exactly (RECORD-A-0008 decision 2). Decoding is strict: an
+// unknown tag, a truncated payload, a payload whose fixed width is
+// wrong, or a reference the resolver cannot answer is not ok — never a
+// guess, for the same reason an unknown record kind halts.
 term_decode :: proc(
 	enc: []byte,
 	resolve: Resolve_Iri,
 	data: rawptr,
+	resolve_term: Resolve_Term = nil,
 	allocator := context.allocator,
 ) -> (
 	t: rdf.Term,
@@ -106,6 +139,69 @@ term_decode :: proc(
 		copy(joined, ns)
 		copy(joined[len(ns):], local)
 		return rdf.IRI(string(joined)), true
+	case TERM_TAG_TRIPLE:
+		// par. 11.3: three on-disk component ids, fixed width, checked
+		// exactly. A resolver-less caller refuses, which is what every
+		// caller did before this tag existed.
+		if resolve_term == nil || len(payload) != TERM_TRIPLE_PAYLOAD {
+			return nil, false
+		}
+		parts: [3]rdf.Term
+		built := 0
+		for i in 0 ..< 3 {
+			id := get_u64(payload[i * 8:])
+			if id == 0 {
+				break // 0 is "none" — the default graph, an absent actor — never a term
+			}
+			p, p_ok := resolve_term(data, id, allocator)
+			if !p_ok {
+				break
+			}
+			parts[i] = p
+			built += 1
+		}
+		if built < 3 {
+			for i in 0 ..< built {
+				rdf.destroy_term(parts[i], allocator)
+			}
+			return nil, false
+		}
+		tr := new(rdf.Triple, allocator)
+		tr^ = rdf.Triple {
+			subject   = parts[0],
+			predicate = parts[1],
+			object    = parts[2],
+		}
+		return tr, true
+	case TERM_TAG_DIR_LANG:
+		// RECORD-A-0007: tag | langlen u8 | dir u8 | lang | lexical,
+		// with three refusals that keep it injective. A zero language
+		// length and a .None direction are the two shapes tag 0x04
+		// already encodes; a direction byte outside rdf.Direction is
+		// not a direction. All three are decoder-side because par. 3.2's
+		// injectivity is the format's property, not this encoder's.
+		if len(payload) < 2 {
+			return nil, false
+		}
+		l := int(payload[0])
+		if l == 0 || 2+l > len(payload) {
+			return nil, false
+		}
+		dir: rdf.Direction
+		switch payload[1] {
+		case u8(rdf.Direction.LTR):
+			dir = .LTR
+		case u8(rdf.Direction.RTL):
+			dir = .RTL
+		case:
+			return nil, false
+		}
+		return rdf.Literal{
+			lexical = string(payload[2+l:]),
+			datatype = rdf.RDF_DIR_LANG_STRING,
+			language = string(payload[2 : 2+l]),
+			direction = dir,
+		}, true
 	}
 	return nil, false
 }

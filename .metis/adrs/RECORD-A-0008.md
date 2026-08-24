@@ -65,8 +65,14 @@ byte-for-byte today's behaviour — so no existing call site changes, and a
 consumer that holds a dictionary opts in with one procedure.
 
 **2. A decoded triple term is wholly owned by its allocator.** Every component
-is cloned from `allocator`; the tree contains no borrowed view. `rdf.destroy_triple`
-is therefore the correct and obvious free. To keep the boundary legible,
+is cloned from `allocator`; the tree contains no borrowed view.
+**`rdf.destroy_term`** is therefore the correct and obvious free — note the
+verb, corrected 2026-08-24 while implementing `RECORD-T-0022`: for a
+`^rdf.Triple` it deep frees every component *and then the node*
+(`../odin-rdf-parser/rdf/clone.odin:89`), where `rdf.destroy_triple` takes a
+`Triple` by value and leaves the node behind. The hazard this decision is
+about is unchanged — both reach every component string — but the verb a
+consumer should be told to call is `destroy_term`. To keep the boundary legible,
 `snapshot_term` gains a paired verb — **`snapshot_term_destroy`**, total over
 everything `snapshot_term` returns, a no-op for the borrowing kinds and a deep
 free for a triple term.

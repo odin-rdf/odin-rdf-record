@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""An independent verifier for the rdflog format, format version 1.
+"""An independent verifier for the rdflog format, format version 2.
 
 Written from doc/design/log.md ALONE — the constraint this file exists
 to prove (RECORD-T-0006): the repository's value proposition is that a
@@ -33,11 +33,16 @@ import os
 import struct
 import sys
 
-# §3: fixed 64-byte header, magic, version 1. §4: 8-byte frame overhead,
+# §3: fixed 64-byte header, magic, version 2. §4: 8-byte frame overhead,
 # MaxRecordSize 64 MiB. §5.1/§5.5/§6: two 32-byte hashes close a chained
 # body. §5.3: a fact operation is 33 bytes.
 MAGIC = b"RDFLOG\x00\x00"
-VERSION = 1
+# RECORD-A-0007 moved this from 1 for RDF 1.2's two term kinds. Note what
+# did *not* change: a term definition is still `id u64, len u32, payload`
+# (§5.2) and this verifier still never inspects the payload's tag, so the
+# new encodings are invisible here. The bump is a header fact, not an
+# encoding one.
+VERSION = 2
 HEADER_SIZE = 64
 HASH_SIZE = 32
 FRAME_OVERHEAD = 8

@@ -308,7 +308,7 @@ mut_wrong_first_fact :: proc(segs: [][dynamic]u8) {
 mut_future_version :: proc(segs: [][dynamic]u8) {
 	seg := &segs[len(segs)-1]
 	resize(seg, rec.HEADER_SIZE)
-	reencode_header(seg, proc(h: ^rec.Segment_Header) {h.version = 2})
+	reencode_header(seg, proc(h: ^rec.Segment_Header) {h.version = rec.FORMAT_VERSION + 1})
 }
 
 @(private = "file")

@@ -9,7 +9,10 @@ import "core:testing"
 // disagreement is a format bug, not a test bug. RECORD-T-0001.
 
 @(private = "file")
-GOLDEN_HEADER :: "5244464c4f4700000000000100000001000000000000000100000001dc6def980000000000000000000000000000000000000000000000000000000000000000"
+// Recomputed for format version 2 (RECORD-A-0007, RECORD-T-0022) from
+// log.md par. 3's layout with the independent verifier's CRC-32C — the
+// version field and the checksum over it are the only bytes that moved.
+GOLDEN_HEADER :: "5244464c4f47000000000002000000010000000000000001000000013c408b790000000000000000000000000000000000000000000000000000000000000000"
 
 @(private = "file")
 GOLDEN_COMMIT :: "01000000000000000117979cfe362a000000000000000000000000000000000000000000020000000200000000000000010000001901687474703a2f2f6578616d706c652e6f72672f616c69636500000000000000020000001901687474703a2f2f6578616d706c652e6f72672f6b6e6f777301000000000000000100000000000000028280000000000022000000000000000101000000000000000200000000000000020000000000000001000000000000000100000000000000000000000000000000000000000000000000000000000000005cc2324816808c16e27086a2771f5965de13f4c18d7b7e6fc756bfe5c9af00c5"
@@ -55,14 +58,14 @@ test_header_golden_and_round_trip :: proc(t: ^testing.T) {
 	testing.expect(t, wok, "golden header hex decodes")
 	defer delete(want)
 
-	h := Segment_Header{version = 1, segment = 1, first_epoch = 1, first_fact_id = 1}
+	h := Segment_Header{version = FORMAT_VERSION, segment = 1, first_epoch = 1, first_fact_id = 1}
 	dst: [HEADER_SIZE]u8
 	header_encode(h, &dst)
 	testing.expect(t, string(dst[:]) == string(want), "header bytes match the independent encoding")
 
 	got, err := header_decode(dst[:])
 	testing.expect_value(t, err, Decode_Error.None)
-	testing.expect_value(t, got.version, u32(1))
+	testing.expect_value(t, got.version, u32(FORMAT_VERSION))
 	testing.expect_value(t, got.segment, u32(1))
 	testing.expect_value(t, got.first_epoch, u64(1))
 	testing.expect_value(t, got.first_fact_id, u32(1))
@@ -71,7 +74,7 @@ test_header_golden_and_round_trip :: proc(t: ^testing.T) {
 
 @(test)
 test_header_refusals :: proc(t: ^testing.T) {
-	h := Segment_Header{version = 1, segment = 3, first_epoch = 9, first_fact_id = 4}
+	h := Segment_Header{version = FORMAT_VERSION, segment = 3, first_epoch = 9, first_fact_id = 4}
 	dst: [HEADER_SIZE]u8
 	header_encode(h, &dst)
 
@@ -88,8 +91,10 @@ test_header_refusals :: proc(t: ^testing.T) {
 	_, err = header_decode(bad[:])
 	testing.expect_value(t, err, Decode_Error.Bad_Checksum)
 
-	// A wrong version with a valid CRC: re-encode with version 2.
-	header_encode(Segment_Header{version = 2, segment = 3, first_epoch = 9, first_fact_id = 4}, &dst)
+	// A wrong version with a valid CRC: re-encode one past the format's
+	// own. Version 2 stopped being a future version when RECORD-A-0007
+	// bumped FORMAT_VERSION to it.
+	header_encode(Segment_Header{version = FORMAT_VERSION + 1, segment = 3, first_epoch = 9, first_fact_id = 4}, &dst)
 	_, err = header_decode(dst[:])
 	testing.expect_value(t, err, Decode_Error.Bad_Version)
 

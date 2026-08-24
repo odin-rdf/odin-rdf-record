@@ -216,7 +216,7 @@ snapshot_resolve :: proc(snap: Snapshot, t: rdf.Term, allocator := context.alloc
 	}
 	snap := snap
 	buf: [256]u8
-	enc, err := term_encode(t, resolve_snap_datatype, &snap, buf[:], allocator)
+	enc, err := term_encode(t, resolve_snap_datatype, &snap, buf[:], allocator = allocator)
 	if err != .None {
 		return 0, false
 	}
@@ -310,7 +310,7 @@ snapshot_term :: proc(
 		return nil, false
 	}
 	snap := snap
-	return term_decode(set_bytes(snap.idx, id), resolve_snap_iri, &snap, allocator)
+	return term_decode(set_bytes(snap.idx, id), resolve_snap_iri, &snap, allocator = allocator)
 }
 
 // --- order selection -------------------------------------------------

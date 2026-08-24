@@ -56,9 +56,11 @@ test_term_decode :: proc(t: ^testing.T) {
 	testing.expect(t, pok && split == rdf.Term(rdf.IRI("http://example.org/ns/local")), "a split IRI joins")
 	delete(string(split.(rdf.IRI))) // the one allocating case
 
-	// Refusals: empty, the reserved tag, a truncated language tag, a
-	// truncated datatype id, and a reference the resolver cannot answer.
-	refused := [5]string{"", "\x07x", "\x04\x05en", "\x05\x00\x0742", "\x05\x00\x00\x00\x00\x00\x00\x00\x6342"}
+	// Refusals: empty, an unassigned tag, a truncated triple term (0x07
+	// is no longer reserved but its payload is a fixed 24 bytes), a
+	// truncated language tag, a truncated datatype id, and a reference
+	// the resolver cannot answer.
+	refused := [6]string{"", "\x09x", "\x07x", "\x04\x05en", "\x05\x00\x0742", "\x05\x00\x00\x00\x00\x00\x00\x00\x6342"}
 	for enc in refused {
 		_, rok := term_decode(transmute([]u8)enc, tt_resolve, nil)
 		testing.expect(t, !rok, "malformed or unresolvable encodings are refused")

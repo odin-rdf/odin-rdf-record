@@ -33,8 +33,9 @@ import "rdf:rdf"
 // cannot, and one the probe cannot answer.
 Term_Error :: enum u8 {
 	None,
-	Unsupported_Term, // a triple term, a literal with a base direction, a language tag over 255 bytes — the format has no encoding for it, and the format is frozen
+	Unsupported_Term, // a language tag over 255 bytes, a base direction with no language, a nil term — the format has no encoding for it
 	Unknown_Datatype, // a typed literal whose datatype the resolver does not know — a probe's miss; the intern never returns it, because it defines what it lacks
+	Unknown_Component, // a triple term whose component the resolver does not know — Unknown_Datatype's twin one tag over (RECORD-A-0008)
 }
 
 // Resolve_Datatype resolves a typed literal's datatype IRI to the
@@ -43,6 +44,19 @@ Term_Error :: enum u8 {
 // term_decode's Resolve_Iri. A probe answers from the published
 // dictionary and fails on a miss; the intern answers by interning.
 Resolve_Datatype :: proc(data: rawptr, iri: rdf.IRI) -> (id: u64, ok: bool)
+
+// Resolve_Term_ID resolves a triple term's component to the on-disk id
+// the encoding carries (par. 11.3) — term_encode's second callback,
+// the mirror of term_decode's Resolve_Term. **On-disk, not resident**
+// (RECORD-A-0008 decision 3): the arena holds the log's term
+// definitions verbatim and snapshot_resolve probes them byte for byte,
+// so an inlined component must be widened through res_inline_disk
+// rather than by a cast, or the two paths disagree and a term that is
+// there fails to resolve.
+//
+// nil refuses every triple term, which is what term_encode did before
+// RECORD-I-0004 and what a caller with no dictionary wants.
+Resolve_Term_ID :: proc(data: rawptr, t: rdf.Term) -> (id: u64, ok: bool)
 
 // term_inline is the inline gate: the resident id of a literal the
 // frozen scheme carries in the id itself — xsd:boolean, a canonical
@@ -88,18 +102,24 @@ term_inline :: proc(t: rdf.Term) -> (id: Term_ID, ok: bool) {
 // "x"@en must be one term) and are refused over 255 bytes rather than
 // truncated. A typed literal's datatype goes through `resolve` first
 // and encodes as its on-disk u64 id; xsd:string never does — tag 0x03
-// makes "x" and "x"^^xsd:string one term. Refuses, never guesses, the
-// terms the frozen format has no tag for: a triple term in any
-// position and a literal with a base direction.
+// makes "x" and "x"^^xsd:string one term. A base direction encodes
+// under tag 0x08 with the same fold on its language half; a direction
+// with no language is not an RDF 1.2 term and gets no bytes rather than
+// an invented encoding. A triple term encodes under tag 0x07 when
+// `resolve_component` can name its parts, and is refused when it is nil.
 //
 // The inline gate is not consulted here: a caller that wants an id
 // tries term_inline first, and the inlined types reach this encoder
-// only in their non-canonical forms, which are dictionary terms.
+// only in their non-canonical forms, which are dictionary terms. That
+// ordering is what makes a triple term's components canonical, and so
+// what makes par. 3.2's injectivity hold for tag 0x07: one term, one id,
+// one encoding.
 term_encode :: proc(
 	t: rdf.Term,
 	resolve: Resolve_Datatype,
 	data: rawptr,
 	buf: []byte,
+	resolve_component: Resolve_Term_ID = nil,
 	allocator := context.allocator,
 ) -> (
 	enc: []byte,
@@ -120,10 +140,24 @@ term_encode :: proc(
 		copy(enc[1:], string(v))
 		return enc, .None
 	case rdf.Literal:
-		if v.direction != .None {
-			return nil, .Unsupported_Term
-		}
 		switch {
+		case v.direction != .None:
+			// RDF 1.2's rdf:dirLangString always carries a language
+			// (the parser states it as a type invariant), so a
+			// direction without one is refused rather than encoded —
+			// admitting it would put a second spelling under one term.
+			if v.language == "" || len(v.language) > 255 {
+				return nil, .Unsupported_Term
+			}
+			enc = fit(buf, 3+len(v.language)+len(v.lexical), allocator)
+			enc[0] = TERM_TAG_DIR_LANG
+			enc[1] = u8(len(v.language))
+			enc[2] = u8(v.direction)
+			for c, i in transmute([]u8)v.language {
+				enc[3+i] = c + 32 if c >= 'A' && c <= 'Z' else c
+			}
+			copy(enc[3+len(v.language):], v.lexical)
+			return enc, .None
 		case v.language != "":
 			if len(v.language) > 255 {
 				return nil, .Unsupported_Term
@@ -154,7 +188,24 @@ term_encode :: proc(
 			return enc, .None
 		}
 	case ^rdf.Triple:
-		return nil, .Unsupported_Term
+		if resolve_component == nil {
+			return nil, .Unsupported_Term
+		}
+		enc = fit(buf, 1+TERM_TRIPLE_PAYLOAD, allocator)
+		enc[0] = TERM_TAG_TRIPLE
+		components := [3]rdf.Term{v.subject, v.predicate, v.object}
+		for c, i in components {
+			id, id_ok := resolve_component(data, c)
+			if !id_ok {
+				if raw_data(enc) != raw_data(buf) {
+					delete(enc, allocator)
+				}
+				return nil, .Unknown_Component
+			}
+			assert(id != 0, "term_encode: a component resolved to 0, which is not a term")
+			put_u64_at(enc[1+i*8:9+i*8], id)
+		}
+		return enc, .None
 	}
 	return nil, .Unsupported_Term // a nil Term is not an RDF term
 }
@@ -227,7 +278,7 @@ intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: Term_ID, err: Term_Error) 
 		return iid, .None
 	}
 	buf: [256]byte
-	enc, enc_err := term_encode(t, intern_datatype, it, buf[:], it.allocator)
+	enc, enc_err := term_encode(t, intern_datatype, it, buf[:], allocator = it.allocator)
 	if enc_err != .None {
 		return 0, enc_err
 	}

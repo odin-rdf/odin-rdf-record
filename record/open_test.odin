@@ -298,7 +298,7 @@ test_open_husk :: proc(t: ^testing.T) {
 	// A valid header carrying an unknown version is a future format,
 	// never a husk: it halts, and recovery removes nothing.
 	future: [HEADER_SIZE]u8
-	header_encode(Segment_Header{version = 2, segment = 2, first_epoch = 2, first_fact_id = 1, base_hash = head}, &future)
+	header_encode(Segment_Header{version = FORMAT_VERSION + 1, segment = 2, first_epoch = 2, first_fact_id = 1, base_hash = head}, &future)
 	ofs_set(f2, future[:])
 	removes_before := fs.removes
 	_, tearv, errv := recover("store", ofs_ops(&fs))

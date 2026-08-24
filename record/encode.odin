@@ -23,7 +23,7 @@ import "core:crypto/sha2"
 
 // The fixed shape of the format (log.md par. 3, par. 4).
 MAGIC :: "RDFLOG\x00\x00"
-FORMAT_VERSION :: 1
+FORMAT_VERSION :: 2
 HEADER_SIZE :: 64
 HASH_SIZE :: 32
 FRAME_OVERHEAD :: 8

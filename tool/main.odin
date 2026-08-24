@@ -283,7 +283,7 @@ resolve_term :: proc(d: ^Dumper, id: u64, buf: []byte) -> (rdf.Term, bool) {
 	if id == 0 || id > u64(len(d.dict)) {
 		return nil, false
 	}
-	return rec.term_decode(d.dict[id-1], dump_resolve, d, context.temp_allocator)
+	return rec.term_decode(d.dict[id-1], dump_resolve, d, allocator = context.temp_allocator)
 }
 
 dump_op :: proc(data: rawptr, epoch: u64, op: rec.Fact_Op) -> bool {
