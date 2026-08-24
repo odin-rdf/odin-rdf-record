@@ -524,6 +524,11 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 	quad :: proc(s, p, o: rdf.Term, g: rdf.Graph_Label = nil) -> rdf.Quad {
 		return {triple = {s, p, o}, graph = g}
 	}
+	// One triple term nested inside another, so the log holds a
+	// definition of tag 0x07 whose own component is a definition of
+	// tag 0x07.
+	inner := rdf.Triple{alice, knows, rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}}
+	outer := rdf.Triple{alice, knows, &inner}
 	changesets := [?][]rec.Op{
 		{{.Assert, quad(alice, knows, rdf.IRI("http://example.org/bob"))}},
 		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}, g)}},
@@ -531,6 +536,16 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 		{{.Retract, quad(alice, knows, rdf.IRI("http://example.org/bob"))}, {.Assert, quad(rdf.Blank_Node("b0"), knows, alice, g)}},
 		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "1.5", datatype = "http://www.w3.org/2001/XMLSchema#decimal"})}},
 		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "2024-02-29", datatype = rec.XSD_DATE}, g)}},
+		// RDF 1.2's two kinds (RECORD-T-0025). A triple term defines
+		// several terms for one op and its encoding references three
+		// ids; a base-direction literal is the format's newest tag. Both
+		// are here so the cross-implementation agreement is checked over
+		// a log that actually contains them — the Python verifier reads
+		// a term definition as `id u64, len u32, payload` (log.md par.
+		// 5.2) and never looks at the tag, and this is what turns that
+		// reading from a claim into a check.
+		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "Wort", datatype = rdf.RDF_DIR_LANG_STRING, language = "de-CH", direction = .LTR})}},
+		{{.Assert, quad(alice, knows, &outer, g)}},
 	}
 	for cs, i in changesets {
 		e, _, aerr := rec.apply(&s, {ops = cs, actor = alice, reason = rdf.Literal{lexical = "proof", datatype = rdf.XSD_STRING}})
@@ -543,7 +558,7 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 
 	odin_line, py_line := verify_both(t, APPLY_STORE)
 	hexbuf: [64]byte
-	want := fmt.tprintf("clean %s 6", hex_of(head, hexbuf[:]))
+	want := fmt.tprintf("clean %s %d", hex_of(head, hexbuf[:]), len(changesets))
 	testing.expectf(t, odin_line == py_line, "apply-written clean: odin %q, python %q", odin_line, py_line)
 	testing.expectf(t, odin_line == want, "apply-written clean: both said %q, want %q", odin_line, want)
 

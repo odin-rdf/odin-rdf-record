@@ -231,6 +231,24 @@ The payload is `architecture.md`'s canonical encoding verbatim, tag byte include
 terms per §11.3 of that document. Its injectivity argument carries over unchanged,
 and reusing it means there is one term encoder in the system rather than two.
 
+> **Amended 2026-08-25 (`RECORD-I-0004`).** `0x07` is no longer reserved: it is
+> a **triple term**, `0x07 | sID | pID | oID`, three 8-byte big-endian on-disk
+> ids, a fixed 25-byte encoding checked for exactly that length — a tolerated
+> tail would be a second encoding of one term. `0x08` joins the list as a
+> **literal with a base direction**, `0x08 | langlen u8 | dir u8 | lang |
+> lexical`, the language half lowercased exactly as `0x04`'s is. Three refusals
+> keep `0x08` injective and are the decoder's, not merely the encoder's: a
+> language length of zero, a direction of `.None`, and a direction byte outside
+> `{LTR, RTL}` are all refused, because the first two are shapes `0x04` already
+> spells and the third is not a direction. The layouts are decided in
+> `RECORD-A-0007`, the format version moved to **2** for them (§11), and
+> architecture.md §11.3's *semantic* deferral stands.
+>
+> Note what did **not** change: a term definition is still `id u64, len u32,
+> payload`, so a reader that does not interpret the payload's tag — as the
+> cross-implementation verifier in `tests/verify/rdflog_verify.py` does not —
+> needed nothing here.
+
 Four consequences worth stating:
 
 - **The dictionary is fully derived from the log.** IDs are assigned in
@@ -252,6 +270,22 @@ Four consequences worth stating:
 
 A typed literal's datatype IRI must be defined before the literal that references
 it, which is the same ordering constraint `intern` already enforces (§3.2).
+
+> **Amended 2026-08-25 (`RECORD-I-0004`, `RECORD-T-0023`): the rule is
+> transitive, and it is now checked.** A triple term's three components are
+> references like a datatype, and each may itself be a triple term, so *every*
+> dictionary id an encoding names must be defined before it. Because ids are
+> assigned in first-appearance order, that is one comparison — a reference is
+> strictly **lower** than the id referencing it — rather than any bookkeeping.
+> An inlined component is not a reference: it carries its own value and has no
+> definition to be ordered against, which is the bullet above about inlined
+> terms having no definitions, read from the other side.
+>
+> A replayer **must refuse** a definition that breaks it. This is the same
+> argument the redundant `id` field is kept for, one step stronger: a violation
+> is not merely a disagreement, it is the only way a log could ask a decoder to
+> recurse without end. A cycle needs a forward reference, and a replayer that
+> refuses forward references admits none.
 
 The 32 KB key limit that forced §3.2's hashed-key path for long literals **does not
 apply here** — a term definition is length-prefixed with a `u32`, so a document
@@ -777,6 +811,25 @@ leave the live directory, where the tradeoff is different.
   new segment, not an in-place migration. Old segments stay readable at their own
   version, which is the only migration story that is compatible with never
   rewriting history.
+
+  > **Amended 2026-08-25 — the first bump happened, and the implementation is
+  > stricter than this sentence (`RECORD-I-0004`, `RECORD-A-0007`).** The format
+  > moved to **version 2** for RDF 1.2's two term kinds (§5.2). "Old segments
+  > stay readable at their own version" describes a reader that understands more
+  > than one version; `header_decode` has always tested `version != FORMAT_VERSION`
+  > and answered `.Bad_Version`, so a v2 binary refuses a v1 log **outright**,
+  > and every byte in that v1 log is valid v2. This divergence is recorded rather
+  > than repaired: a multi-version reader is exactly the schema-evolution
+  > machinery this bullet exists to refuse, and each version it admitted would be
+  > a second thing two independent implementations must agree about — the second
+  > implementation here being 270 lines of Python whose whole worth is that it
+  > was written from this document alone.
+  >
+  > What the sentence gets right, and what this bump honours: **nothing is
+  > migrated and no history is rewritten.** The cost is that a v1 log needs a v1
+  > binary, which was acceptable because no v1 log exists outside this
+  > repository's own regenerated test corpora. A future bump with deployed logs
+  > in the world would have to revisit this bullet rather than cite it.
 
 ---
 

@@ -1018,3 +1018,80 @@ term_id :: proc(t: ^testing.T, snap: Snapshot, term: rdf.Term) -> Term_ID {
 	testing.expect(t, ok, "the term resolves")
 	return id
 }
+
+
+@(test)
+test_rdf12_untouched_list :: proc(t: ^testing.T) {
+	// RECORD-I-0004 par. 9's list, asserted rather than assumed
+	// (RECORD-T-0025). "Nothing else changed" is the claim this store's
+	// proof layer exists to make checkable, and a list of things nobody
+	// tested is not a claim.
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
+	s: Store
+	at_open(t, &s, mem_file_ops(&fs))
+	defer store_close(&s)
+
+	alice, knows := iri("http://ex/alice"), iri("http://ex/knows")
+	five := rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}
+	tt := rdf.Triple{alice, knows, five}
+	dir := rdf.Literal{lexical = "Wort", datatype = rdf.RDF_DIR_LANG_STRING, language = "de", direction = .RTL}
+
+	// term_inline and the inline path: RECORD-A-0001 is frozen, neither
+	// new kind inlines, and the inlined types still do.
+	_, t_inl := term_inline(&tt)
+	testing.expect(t, !t_inl, "a triple term does not inline")
+	_, d_inl := term_inline(dir)
+	testing.expect(t, !d_inl, "a base-direction literal does not inline")
+	fid, f_inl := term_inline(five)
+	testing.expect(t, f_inl && fid & RES_INLINE_FLAG != 0, "a canonical integer still inlines")
+
+	ops := [3]Op{
+		op(.Assert, alice, knows, five),
+		op(.Assert, alice, knows, &tt, rdf.IRI("http://ex/g")),
+		op(.Assert, alice, knows, dir),
+	}
+	e, _, err := apply(&s, {ops = ops[:]})
+	testing.expect_value(t, err, Apply_Error{})
+	testing.expect_value(t, e, Epoch(1))
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+
+	// The fact table: 24 bytes, no pointers, unchanged by any of this.
+	testing.expect_value(t, size_of(Fact), 24)
+	testing.expect_value(t, s.n_facts, u32(3))
+
+	// The six permutations still sort Term_IDs, and a triple term's id
+	// orders among them like any other — no order knows what it holds.
+	tt_id, _ := snapshot_resolve(snap, &tt)
+	for o in Order {
+		testing.expect_value(t, len(snap.idx.ord[o]), 3)
+	}
+
+	// Filter, visibility and the epoch table: origin must still be
+	// stated, a retract still ends visibility at the retracting epoch,
+	// and the epoch table still carries actor and reason.
+	testing.expect(t, snapshot_exists(snap, {o = tt_id}, {origin = .Any}), "the triple term's fact is live")
+	testing.expect(t, !snapshot_exists(snap, {o = tt_id}, {origin = .Derived}), "and it is not derived")
+	meta := snapshot_epoch_meta(snap, Epoch(1))
+	testing.expect(t, meta.wall > 0, "the epoch table still carries a wall clock")
+
+	r := [1]Op{op(.Retract, alice, knows, &tt, rdf.IRI("http://ex/g"))}
+	e2, _, rerr := apply(&s, {ops = r[:]})
+	testing.expect_value(t, rerr, Apply_Error{})
+	testing.expect(t, at_exists(&s, Epoch(1), ops[1]), "visible at the epoch that asserted it")
+	testing.expect(t, !at_exists(&s, e2, ops[1]), "gone at the epoch that retracted it")
+
+	// The term index: encoded bytes, sorted opaquely. Every term of the
+	// snapshot is found by its own encoding, and the index is sorted.
+	snap2, _ := store_latest(&s)
+	defer snapshot_release(&snap2)
+	prev: []byte
+	for id in Term_ID(1) ..= Term_ID(snap2.idx.n_terms) {
+		enc := snapshot_bytes(snap2, snap2.idx.terms[id-1])
+		if prev != nil {
+			testing.expect(t, string(prev) <= string(enc), "the term index is sorted by encoding")
+		}
+		prev = enc
+	}
+}

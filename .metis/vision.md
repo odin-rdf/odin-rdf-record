@@ -105,6 +105,41 @@ their side, once that API is real.
 > the store's own code (RECORD-T-0020); widths, format and sentinels are
 > unchanged. Tagged `v0.3.0`; the siblings adopt the types at their next pin.
 
+> **Amended 2026-08-25 (`RECORD-I-0004`): the format moved, for the first
+> time.** The three amendments above are all sibling-port findings where *this*
+> store was wrong or untyped. This one is the other thing the family stance
+> allowed for: a capability this store's own architecture document named,
+> costed and deliberately left unbuilt until a consumer needed it.
+> odin-rdf-sparql's port (`SPARQL-I-0003`) needed it, and the family owner
+> gated that port on it rather than let it narrow a headline capability of the
+> query engine.
+>
+> **RDF 1.2's two term kinds are real, and the format is version 2.** Tag
+> `0x07` is a triple term — three on-disk component ids, the layout
+> architecture.md §11.3 specified when it reserved the byte — and tag `0x08` is
+> a literal with a base direction. The intern recurses; §5.2's ordering rule is
+> transitive and enforced on both paths, as an assert on the write path and as
+> a refusal on the replay path, which is what makes a hostile log's recursion
+> finite. A triple term is takeable apart without decoding it
+> (`snapshot_triple_parts`: a tag check and three reads out of the arena),
+> which is **cheaper than the store the sibling is porting away from**, where
+> the same question cost a materialisation plus three dictionary lookups.
+>
+> **Version 2 does not read version 1, and there is no migration.** The cost is
+> that a v1 log needs a v1 binary; it was acceptable because no v1 log exists
+> outside this repository's own regenerated corpora, and it will never be
+> cheaper than it was here. The proof layer holds: both verifiers still agree
+> verdict for verdict over the fault corpus, now over logs that contain both new
+> tags, and the Python verifier needed **one constant** — the version — because
+> it reads a term definition as `id u64, len u32, payload` and never looks at
+> the tag. The capability is proven against the W3C rdf12 eval suites end to
+> end, 29 turtle and 25 trig documents, every one of them carrying a triple
+> term and every one of them committing.
+>
+> What is **not** decided here, and stays deferred exactly as §11.3 left it:
+> what it means to *assert* versus *mention* a triple term. A triple term is a
+> term; mentioning one asserts nothing.
+
 ## Future State
 
 An embedded store where:

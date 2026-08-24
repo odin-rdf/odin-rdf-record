@@ -90,6 +90,26 @@ the ISMS corpus as one changeset commits in 222–267 ms; resident footprint
 generator's logs, down from 22.9 / 25.9 MB once the term map went). On the
 production seam a commit adds the disk's fsync.
 
+RDF 1.2's two term kinds arrived on 2026-08-25 (RECORD-I-0004), and with
+them **format version 2** — the first time the format has moved. A
+**triple term** is tag `0x07`, three on-disk component ids in the layout
+`architecture.md` §11.3 specified when it reserved the byte; a **literal
+with a base direction** is tag `0x08`. The intern recurses, and §5.2's
+rule that a reference is defined before the term naming it is now
+transitive: asserted on the write path, refused on the replay path, which
+is what keeps a hostile log's recursion finite. Taking a triple term apart
+costs a tag check and three reads out of the arena
+(`snapshot_triple_parts`) — the components are the encoding, so no
+materialisation and no dictionary lookups. `snapshot_kind` gained
+`.Triple`, and `snapshot_term_destroy` is the verb that frees whatever
+`snapshot_term` returned, a decoded triple term being the one kind that
+owns everything in it. **Version 2 does not read version 1 and there is no
+migration**, the format's standing rule; what did not move is the proof
+layer, which still has both verifiers agreeing verdict for verdict over
+logs that now contain both new tags. Proven against the W3C rdf12 eval
+suites end to end: 29 turtle and 25 trig documents, every one carrying a
+triple term, every one committing.
+
 ## Position in the family
 
 > **Amended 2026-08-20 (RECORD-I-0003).** The paragraph and table below

@@ -1761,6 +1761,36 @@ almost nothing that remains unresolved is about storage.
    assert versus mention — are still moving. A.6 recommends named graphs instead
    for now, so the only decision needed today is whether to **reserve the tag
    byte**, which costs nothing and preserves the option.
+
+   > **Amended 2026-08-25 — the reservation was spent (`RECORD-I-0004`,
+   > `RECORD-T-0022`–`-T-0024`), for odin-rdf-sparql's port.** The paragraph
+   > above stands as the record of the decision; what it deferred is now built,
+   > in the layout it named. Tag `0x07` carries three on-disk component ids;
+   > `intern` recurses; the ordering constraint §3.2 states for a datatype is
+   > enforced transitively, on the write path as an assert and on the replay
+   > path as a refusal (`Load_Error.Term_Order`), and that refusal is what makes
+   > a hostile log's recursion finite. A second tag, `0x08`, was added at the
+   > same time for RDF 1.2's other new term shape, a literal with a base
+   > direction; it had no reservation and its layout is decided in
+   > `RECORD-A-0007`. The format moved to **version 2** for both.
+   >
+   > **What is still deferred is the sentence above about semantics.** What it
+   > means to *assert* versus *mention* a triple term is not decided here and
+   > this store takes no position on it: a triple term is a term — storable,
+   > resolvable, identical to itself, and takeable apart (`snapshot_triple_parts`)
+   > — and mentioning one asserts nothing. **A.6's recommendation of named
+   > graphs for modelling is untouched**; it is advice to a data modeller, and
+   > what changed is only that an engine handed a document that already contains
+   > triple terms can now keep them.
+   >
+   > Recursion made two design points sharper than this paragraph anticipated,
+   > both in `RECORD-A-0008`: a decoded triple term cannot borrow the way every
+   > other term does, so it is wholly owned and freed with
+   > `snapshot_term_destroy`; and its component ids are **on-disk** ids, because
+   > the arena holds the log's bytes verbatim and the dictionary probe is a
+   > byte-exact match. §3.4's invariant — an inlined term has no dictionary
+   > entry — is what keeps those components canonical, and so is what §3.2's
+   > injectivity now rests on one level down.
 4. **Blank node identity across transactions.** Blank node labels are scoped to a
    document, not a graph. Two loads of the same ontology file must not merge their
    blank nodes — and note that SHACL shapes and OWL restrictions (A.3) are written

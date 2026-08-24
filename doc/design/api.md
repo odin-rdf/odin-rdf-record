@@ -1268,6 +1268,36 @@ the whole benefit.
 applies to result materialisation, though the motivation is now cache locality
 rather than B+tree cursor movement.
 
+> **Amended 2026-08-25 (`RECORD-I-0004`): RDF 1.2's two term kinds, and the
+> first term that owns.** `Kind` gained a fourth answer, **`.Triple`**, and its
+> switch is exhaustive — an encoding whose tag this store does not define panics
+> rather than being called a literal, which is what the previous fall-through
+> would have done for a triple term, silently, in the one procedure whose job is
+> to keep the tag layout private. A base-direction literal answers `.Literal`.
+>
+> Two procedures joined this section:
+>
+> - **`TripleParts(id) ([3]ID, bool)`** — a triple term's three components as
+>   ids: a tag check and three reads out of the arena, no allocation, no decode,
+>   no recursion, because the components *are* the encoding (architecture.md
+>   §11.3). This is the cheap path and a query engine's hot path; taking a
+>   triple term apart by materialising it and re-resolving its parts is what a
+>   store without the components in the encoding has to do. Not ok for an
+>   inlined id or any term that is not a triple term.
+> - **`TermDestroy(id, t)`** — the verb `Term` has needed since split IRIs, and
+>   needs properly now. `Term` borrows for most kinds, allocates a joined string
+>   for a split IRI, and returns a **wholly owned tree** for a triple term
+>   (`RECORD-A-0008`: every component owned by the allocator, so nothing in it
+>   dies with the store). `TermDestroy` is total over all of them and a no-op for
+>   the borrowing kinds, so a caller pairs it with every `Term` call rather than
+>   having to know which case it got. It takes the **id** because the term alone
+>   cannot distinguish a joined IRI from one borrowed out of the arena.
+>
+> `Resolve` recurses through a triple term's components, so a component this
+> snapshot has never seen makes the whole term a miss — §12.2's fast reject, one
+> level down. `Bytes` is unchanged and still a view into the arena, which is what
+> makes `TripleParts` free.
+
 ### 12.8 What SPARQL will want that this does not yet give
 
 Named now rather than discovered later:
@@ -1290,6 +1320,21 @@ Named now rather than discovered later:
   binding slots is the operator layer's job, not this one's. `FactID`s are stable
   and citable (§2), which is what makes a justification record (A.5) able to point
   at one.
+
+> **Re-read 2026-08-25 (`RECORD-T-0025`), as `RECORD-I-0004` required.** One
+> item moved, and it is not in the list above because this section never
+> anticipated it: **a SPARQL engine can now store and take apart a triple term**,
+> which it could not when this section was written and which
+> architecture.md §11.3 had deferred. `TripleParts` (§12.7) is the entry point,
+> and it is *cheaper* than the equivalent in the store odin-rdf-sparql is
+> porting from.
+>
+> The four items above are otherwise unmoved. `ORDER BY` still has no cheap path;
+> graph sets are still `Filter.Graphs`, and architecture.md §9's "default graph or
+> union" decision is still unmade; bindings should still not be a map; layer 1
+> still yields `FactID`s. Nothing in §12 needed a new *query* shape for triple
+> terms, which is `RECORD-I-0004`'s non-goal holding: a `Pattern` binds ids and a
+> triple term is an id.
 
 ### 12.9 Open questions
 

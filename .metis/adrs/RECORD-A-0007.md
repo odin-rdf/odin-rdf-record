@@ -91,9 +91,19 @@ corpus and the §9 ISMS-scale measurement corpus are regenerated at v2
 
 The strict-inequality check stays strict: a v2 binary refuses a v1 log, *even
 though every byte in that v1 log is valid v2*. That is not an oversight being
-preserved — it is what "no schema evolution" means when written down, and
-loosening it to `<=` would introduce the migration story this format declines
-to have.
+preserved — loosening it to `<=` would introduce the migration story this format
+declines to have.
+
+> **Corrected 2026-08-25 while implementing `RECORD-T-0025`.** This paragraph
+> first said the strict check "is what 'no schema evolution' means when written
+> down". It is not: `log.md` §11 says *"Old segments stay readable at their own
+> version"*, which describes a reader that understands more than one version, and
+> `header_decode` has never been such a reader. The implementation is **stricter
+> than the document**, and the decision above is unchanged by that — but the
+> ground for it is the argument in Rationale, not a sentence in §11 that says
+> something else. §11 now carries a dated amendment recording the divergence and
+> declining to repair it, on the ground that a multi-version reader is precisely
+> the machinery that bullet exists to refuse.
 
 ## Alternatives Analysis
 
