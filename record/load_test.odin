@@ -180,11 +180,33 @@ test_load_refusals :: proc(t: ^testing.T) {
 	dup := [1]Fact_Op{{op = .Assert, s = 2, p = 2, o = 1, g = 1}}
 	// Term 4's encoding is term 1's: two ids, one meaning.
 	twice := [1]Term_Def{{id = 4, enc = transmute([]byte)string("\x01http://example.org/a")}}
+	// A triple term naming a component that is not defined yet — id 9
+	// where 4 is being defined. log.md par. 5.2's ordering rule, which
+	// RECORD-I-0004 made transitive, and the reason a hostile log cannot
+	// make the decoder's recursion unbounded: a cycle needs a forward
+	// reference, and there are none past this refusal.
+	forward := [1]Term_Def {
+		{
+			id = 4,
+			enc = transmute([]byte)string("\x07\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x09"),
+		},
+	}
+	// The same shape one step subtler: a triple term naming *itself*.
+	// Self-reference is the degenerate cycle and the same comparison
+	// catches it, because a component must be strictly lower.
+	self := [1]Term_Def {
+		{
+			id = 4,
+			enc = transmute([]byte)string("\x07\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x04"),
+		},
+	}
 
-	crafts := [3]Craft{
+	crafts := [5]Craft{
 		{.Retract_Not_Live, nil, dead[:]},
 		{.Duplicate_Assert, nil, dup[:]},
 		{.Duplicate_Term, twice[:], nil},
+		{.Term_Order, forward[:], nil},
+		{.Term_Order, self[:], nil},
 	}
 	for craft in crafts {
 		ofs_set(f3, original)

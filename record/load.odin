@@ -29,6 +29,7 @@ Load_Error :: enum {
 	Retract_Not_Live, // a retract of a quad with no live generation (log.md par. 5.3)
 	Duplicate_Assert, // an assert of a quad already live (log.md par. 5.3)
 	Duplicate_Term,   // a term definition whose encoding is already interned (architecture.md par. 3.2 injectivity)
+	Term_Order,       // a term definition referencing an id not yet defined — log.md par. 5.2's ordering rule, transitive since RECORD-I-0004
 	Epoch_Overflow,   // an epoch at or past LIVE_EPOCH — beyond the resident u32 scheme (api.md par. 2.1)
 	Dict_Overflow,    // the arena past its u32 addressing (resident.odin)
 }
@@ -114,6 +115,17 @@ load_term :: proc(data: rawptr, id: u64, enc: []byte) -> bool {
 	if string(enc) in ld.seen {
 		ld.term = id
 		return load_fail(ld, .Duplicate_Term)
+	}
+	// par. 5.2's ordering rule, transitive since RECORD-I-0004: every
+	// dictionary id a definition names must already be defined, which
+	// under first-appearance numbering is one comparison. This is what
+	// makes a triple term's recursion finite on a *hostile* log rather
+	// than only on one this store wrote — a cycle needs a forward
+	// reference, and there are none below this line. A refusal, not an
+	// assert: a malformed log is data.
+	if !term_order_ok(enc, id) {
+		ld.term = id
+		return load_fail(ld, .Term_Order)
 	}
 	// dict_add clones into the arena within the call, honoring the
 	// seam's borrow; the id it assigns is the log's, because replay's

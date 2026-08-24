@@ -80,6 +80,21 @@ resident_id :: proc(id: u64) -> Term_ID {
 	panic("resident_id: an inline tag outside RECORD-A-0001's frozen scheme")
 }
 
+// disk_id re-tags a resident id back for the log — resident_id's
+// inverse, and the pair RECORD-T-0020 named together. Dictionary ids
+// pass through, inlined ids go back to par. 3.4's bit-63 scheme. It
+// moved here from apply.odin in RECORD-T-0023, when the intern gained
+// a second caller: a triple term's components encode in on-disk form
+// (RECORD-A-0008 decision 3), so the conversion is no longer the write
+// path's alone.
+@(private)
+disk_id :: proc(id: Term_ID) -> u64 {
+	if id & RES_INLINE_FLAG != 0 {
+		return res_inline_disk(id)
+	}
+	return u64(id)
+}
+
 // Fact is the single canonical resident record (api.md par. 2): one
 // generation of one quad, 24 bytes, no pointer fields, no padding.
 // `assert` is immutable after construction; `retract` is the only

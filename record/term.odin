@@ -206,6 +206,74 @@ term_decode :: proc(
 	return nil, false
 }
 
+// term_refs collects the dictionary ids a canonical encoding
+// references: a typed literal's datatype (0x05), a split IRI's
+// namespace (0x06), or a triple term's three components (0x07).
+// Everything else references nothing, and an *inlined* component is
+// not a dictionary id and so is not a reference — it carries its own
+// value and has no definition to be ordered against (log.md par. 5.2:
+// "inlined terms have no definitions").
+//
+// It exists for the ordering rule par. 5.2 states and RECORD-I-0004
+// made transitive: a term's references must be defined before it. Ids
+// are assigned in first-appearance order, so that constraint is one
+// comparison — a reference is *lower* than the id referencing it —
+// rather than any bookkeeping. Not ok on an encoding this codec cannot
+// read at all; a caller checking order has no business guessing.
+term_refs :: proc(enc: []byte) -> (refs: [3]u64, n: int, ok: bool) {
+	if len(enc) == 0 {
+		return refs, 0, false
+	}
+	payload := enc[1:]
+	switch enc[0] {
+	case TERM_TAG_IRI, TERM_TAG_BLANK, TERM_TAG_STRING:
+		return refs, 0, true
+	case TERM_TAG_LANG:
+		return refs, 0, len(payload) >= 1 && 1+int(payload[0]) <= len(payload)
+	case TERM_TAG_DIR_LANG:
+		return refs, 0, len(payload) >= 2 && 2+int(payload[0]) <= len(payload)
+	case TERM_TAG_TYPED, TERM_TAG_SPLIT_IRI:
+		if len(payload) < 8 {
+			return refs, 0, false
+		}
+		refs[0] = get_u64(payload)
+		return refs, 1, true
+	case TERM_TAG_TRIPLE:
+		if len(payload) != TERM_TRIPLE_PAYLOAD {
+			return refs, 0, false
+		}
+		n = 0
+		for i in 0 ..< 3 {
+			id := get_u64(payload[i * 8:])
+			if id & INLINE_FLAG != 0 {
+				continue // carries its own value; nothing to order against
+			}
+			refs[n] = id
+			n += 1
+		}
+		return refs, n, true
+	}
+	return refs, 0, false
+}
+
+// term_order_ok is par. 5.2's ordering rule as one comparison per
+// reference: every dictionary id an encoding names must already be
+// defined, which under first-appearance numbering means strictly lower
+// than the id being defined. 0 is not a term, so it fails too. False
+// on an encoding term_refs cannot read.
+term_order_ok :: proc(enc: []byte, id: u64) -> bool {
+	refs, n, ok := term_refs(enc)
+	if !ok {
+		return false
+	}
+	for i in 0 ..< n {
+		if refs[i] == 0 || refs[i] >= id {
+			return false
+		}
+	}
+	return true
+}
+
 // inline_term materializes an inlined id as the literal it carries,
 // writing the lexical form into the caller's buffer (at least
 // INLINE_LEXICAL_MAX bytes) — the term borrows from it. Only ids

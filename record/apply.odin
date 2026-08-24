@@ -438,12 +438,3 @@ rollback :: proc(s: ^Store, m: Mark, touched: []Fact_ID) {
 	s.terms = nil
 }
 
-// disk_id re-tags a resident id for the log: dictionary ids pass
-// through, inlined ids go back to the on-disk scheme.
-@(private = "file")
-disk_id :: proc(id: Term_ID) -> u64 {
-	if id & RES_INLINE_FLAG != 0 {
-		return res_inline_disk(id)
-	}
-	return u64(id)
-}

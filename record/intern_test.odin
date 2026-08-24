@@ -373,22 +373,35 @@ test_intern :: proc(t: ^testing.T) {
 	gb, gberr := intern_graph(&it, rdf.Blank_Node("b0"))
 	testing.expect(t, gberr == .None && gb == 12, "a blank-node graph label is the same node")
 
-	// Unsupported terms are refused and leave the table untouched.
+	// Unsupported terms are refused and leave the table untouched —
+	// including the components a recursion had already defined, which is
+	// what the intern's mark is for (RECORD-T-0023). This triple term's
+	// third component is a language tag over 255 bytes, so its first two
+	// components intern and are then rolled back.
 	before := len(intern_defs(&it))
-	tt := rdf.Triple{subject = rdf.IRI("http://ex/s"), predicate = rdf.IRI("http://ex/p"), object = rdf.IRI("http://ex/o")}
-	_, terr := intern_term(&it, &tt)
-	testing.expect_value(t, terr, Term_Error.Unsupported_Term)
-	// A base direction needs no recursion, so it interns as soon as the
-	// encoder has a tag for it (RECORD-T-0022); only a triple term waits
-	// for RECORD-T-0023 to wire the component resolver. A direction with
-	// no language is still not a term.
-	_, derr := intern_term(&it, rdf.Literal{lexical = "x", datatype = rdf.RDF_DIR_LANG_STRING, direction = .RTL})
-	testing.expect_value(t, derr, Term_Error.Unsupported_Term)
 	tag := make([]byte, 256)
 	defer delete(tag)
 	for i in 0 ..< len(tag) {
 		tag[i] = 'a'
 	}
+	partial := rdf.Triple {
+		subject   = rdf.IRI("http://ex/only-in-a-refused-term"),
+		predicate = rdf.IRI("http://ex/also-only-here"),
+		object    = rdf.Literal{lexical = "x", datatype = rdf.RDF_LANG_STRING, language = string(tag)},
+	}
+	_, terr := intern_term(&it, &partial)
+	testing.expect_value(t, terr, Term_Error.Unsupported_Term)
+	testing.expect_value(t, len(intern_defs(&it)), before)
+	// And the rollback is exact rather than approximate: re-interning
+	// one of those components gets a fresh id, not the one the refused
+	// recursion handed out.
+	rid, rerr := intern_term(&it, rdf.IRI("http://ex/only-in-a-refused-term"))
+	testing.expect(t, rerr == .None && rid == Term_ID(it.snap.idx.n_terms+u32(before)+1), "a rolled-back component leaves no pending id behind")
+	intern_rollback(&it, before)
+
+	// A direction with no language is still not a term.
+	_, derr := intern_term(&it, rdf.Literal{lexical = "x", datatype = rdf.RDF_DIR_LANG_STRING, direction = .RTL})
+	testing.expect_value(t, derr, Term_Error.Unsupported_Term)
 	_, lerr := intern_term(&it, rdf.Literal{lexical = "x", datatype = rdf.RDF_LANG_STRING, language = string(tag)})
 	testing.expect_value(t, lerr, Term_Error.Unsupported_Term)
 	testing.expect_value(t, len(intern_defs(&it)), before)

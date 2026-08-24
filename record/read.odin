@@ -204,9 +204,11 @@ scan_next :: proc(sc: ^Scan) -> (id: Fact_ID, ok: bool) {
 // dictionary. Everything else probes the arena by its canonical
 // encoding, built by the package's one encoder (intern.odin) in
 // scratch and freed before returning — nothing is interned. A typed
-// literal's datatype resolves recursively; a datatype this snapshot
-// does not know makes the literal a miss, as does any term the format
-// cannot encode. The id must have been interned at or before this
+// literal's datatype resolves recursively, and so does **each component
+// of a triple term** (RECORD-I-0004) — a component this snapshot has
+// never seen makes the whole term a miss, which is par. 12.2's
+// fast-reject one level down. A datatype this snapshot does not know
+// makes the literal a miss, as does any term the format cannot encode. The id must have been interned at or before this
 // snapshot's publication: a term the writer added since is a miss
 // here, by the n_terms bound.
 snapshot_resolve :: proc(snap: Snapshot, t: rdf.Term, allocator := context.allocator) -> (id: Term_ID, ok: bool) {
@@ -216,7 +218,7 @@ snapshot_resolve :: proc(snap: Snapshot, t: rdf.Term, allocator := context.alloc
 	}
 	snap := snap
 	buf: [256]u8
-	enc, err := term_encode(t, resolve_snap_datatype, &snap, buf[:], allocator = allocator)
+	enc, err := term_encode(t, resolve_snap_datatype, &snap, buf[:], resolve_snap_component, allocator)
 	if err != .None {
 		return 0, false
 	}
@@ -403,6 +405,23 @@ resolve_snap_datatype :: proc(data: rawptr, iri: rdf.IRI) -> (id: u64, ok: bool)
 	snap := (^Snapshot)(data)
 	rid, found := snapshot_resolve(snap^, iri)
 	return u64(rid), found
+}
+
+// resolve_snap_component is the encoder's Resolve_Term_ID over a
+// snapshot: a triple term's component must already be a term this
+// snapshot knows, or the term naming it is a miss. The id goes into the
+// encoding in on-disk form (RECORD-A-0008 decision 3), which is what
+// makes the bytes built here byte-identical to the arena's — and
+// therefore findable. Recursion ends because a component's id is always
+// lower than the id of the term naming it.
+@(private = "file")
+resolve_snap_component :: proc(data: rawptr, t: rdf.Term) -> (id: u64, ok: bool) {
+	snap := (^Snapshot)(data)
+	rid, found := snapshot_resolve(snap^, t)
+	if !found {
+		return 0, false
+	}
+	return disk_id(rid), true
 }
 
 // resolve_snap_iri is the codec's Resolve_Iri over a snapshot: the id

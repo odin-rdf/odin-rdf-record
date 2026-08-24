@@ -230,6 +230,13 @@ Intern :: struct {
 	pending:   map[string]Term_ID,
 	defs:      [dynamic]Term_Def,
 	allocator: runtime.Allocator,
+	// component_err carries why a component refused, which
+	// Resolve_Term_ID's (id, ok) shape cannot. The intern never returns
+	// .Unknown_Component for the same reason it never returns
+	// .Unknown_Datatype — it defines what it lacks, so a component only
+	// ever fails because the component itself is unsupported, and that
+	// is the error the caller should see.
+	component_err: Term_Error,
 }
 
 // intern_init readies an empty table over the published dictionary
@@ -271,15 +278,34 @@ intern_defs :: proc(it: ^Intern) -> []Term_Def {
 // the encoder resolving the datatype to build the literal's bytes.
 // Blank-node labels are interned as given (RECORD-I-0003 decision 4):
 // identity is global within a store, and scoping a document's labels
-// is the loader's job. Refuses what the encoder refuses, with nothing
-// recorded: an unsupported term leaves the table as it found it.
+// is the loader's job.
+//
+// **A triple term recurses** (RECORD-I-0004): its three components are
+// interned first, each of which may recurse again, and the encoding
+// carries their ids — so first-appearance numbering puts every
+// component below the term naming it, which is par. 5.2's ordering rule
+// made transitive and checkable by comparison. Two triple terms over
+// the same components are one term and one id, which falls out of the
+// pending map being keyed on bytes once the components have ids.
+//
+// Refuses what the encoder refuses, with nothing recorded: an
+// unsupported term leaves the table as it found it, components a
+// recursion had already defined included.
 intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: Term_ID, err: Term_Error) {
 	if iid, inlined := term_inline(t); inlined {
 		return iid, .None
 	}
+	// The mark makes the recursion transactional: a triple term whose
+	// third component refuses must not leave the first two behind.
+	mark := len(it.defs)
 	buf: [256]byte
-	enc, enc_err := term_encode(t, intern_datatype, it, buf[:], allocator = it.allocator)
+	enc, enc_err := term_encode(t, intern_datatype, it, buf[:], intern_component, it.allocator)
 	if enc_err != .None {
+		intern_rollback(it, mark)
+		if enc_err == .Unknown_Component && it.component_err != .None {
+			enc_err = it.component_err
+			it.component_err = .None
+		}
 		return 0, enc_err
 	}
 	defer if raw_data(enc) != raw_data(buf[:]) {
@@ -297,6 +323,13 @@ intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: Term_ID, err: Term_Error) 
 	// first on any path that gets near.
 	id = Term_ID(it.snap.idx.n_terms + 1 + u32(len(it.defs)))
 	assert(id & RES_INLINE_FLAG == 0, "intern_term: dictionary ids exhausted")
+	// par. 5.2's ordering rule, transitive since RECORD-I-0004 and
+	// asserted here for the same reason par. 5.2 keeps the redundant
+	// `id` field: it is one comparison, and a violation means the
+	// encoder and the numbering disagree about something fundamental.
+	// The replay path checks it too, where it is a refusal rather than
+	// an assert, because a malformed log is data and this is code.
+	assert(term_order_ok(enc, u64(id)), "intern_term: a definition references an id at or above its own")
 	owned := make([]byte, len(enc), it.allocator)
 	copy(owned, enc)
 	append(&it.defs, Term_Def{id = u64(id), enc = owned})
@@ -317,6 +350,36 @@ intern_graph :: proc(it: ^Intern, g: rdf.Graph_Label) -> (id: Term_ID, err: Term
 		return intern_term(it, v)
 	}
 	return 0, .None
+}
+
+// intern_component is the intern's Resolve_Term_ID: a triple term's
+// component interns like any other term, and the id goes into the
+// encoding in **on-disk** form (RECORD-A-0008 decision 3) because the
+// arena holds the log's bytes verbatim. disk_id is the conversion, and
+// it is the identity for a dictionary id — only an inlined component
+// actually moves.
+@(private = "file")
+intern_component :: proc(data: rawptr, t: rdf.Term) -> (id: u64, ok: bool) {
+	it := (^Intern)(data)
+	rid, err := intern_term(it, t)
+	if err != .None {
+		it.component_err = err
+		return 0, false
+	}
+	return disk_id(rid), true
+}
+
+// intern_rollback drops every definition added since `mark`, keys
+// first because the pending map's keys are views into the bytes it
+// frees. The recursion's undo: a triple term that refuses on its third
+// component leaves the table exactly as it found it.
+@(private)
+intern_rollback :: proc(it: ^Intern, mark: int) {
+	for i := len(it.defs) - 1; i >= mark; i -= 1 {
+		delete_key(&it.pending, string(it.defs[i].enc))
+		delete(it.defs[i].enc, it.allocator)
+	}
+	resize(&it.defs, mark)
 }
 
 // intern_datatype is the intern's Resolve_Datatype: a datatype is an

@@ -335,9 +335,16 @@ push :: proc(
 }
 
 // clone_term is rdf.clone_term with the blank prefix applied and
-// allocation failure reported rather than ignored. A triple term is
-// cloned as is — apply refuses it (.Unsupported_Term), which is where
-// the stance put the gap; ingest does not drop it silently.
+// allocation failure reported rather than ignored.
+//
+// **The prefix recurses into a triple term** (RECORD-T-0023). It did
+// not before, and did not have to: apply refused a triple term outright,
+// so the unscoped labels inside one could never reach a store. Now that
+// apply accepts them the recursion is load-bearing — RDF 1.2's reifying
+// syntax puts blank nodes inside triple terms (construct-3.ttl carries
+// `<< _:reifier2 rdf:reifies <<( :a :b :c )>> >>`), and an unscoped
+// `_:b` there would collide across two documents loaded under different
+// prefixes, which is the whole job of Load_Scope.
 @(private = "file")
 clone_term :: proc(t: rdf.Term, prefix: string, allocator: runtime.Allocator) -> (out: rdf.Term, ok: bool) {
 	switch v in t {
@@ -358,7 +365,30 @@ clone_term :: proc(t: rdf.Term, prefix: string, allocator: runtime.Allocator) ->
 		}
 		return lit, true
 	case ^rdf.Triple:
-		return rdf.clone_term(t, allocator), true
+		node := new(rdf.Triple, allocator)
+		if node == nil {
+			return nil, false
+		}
+		built := 0
+		components := [3]rdf.Term{v.subject, v.predicate, v.object}
+		out := [3]rdf.Term{}
+		for c, i in components {
+			cloned, cok := clone_term(c, prefix, allocator)
+			if !cok {
+				break
+			}
+			out[i] = cloned
+			built += 1
+		}
+		if built < 3 {
+			for i in 0 ..< built {
+				rdf.destroy_term(out[i], allocator)
+			}
+			free(node, allocator)
+			return nil, false
+		}
+		node^ = rdf.Triple{subject = out[0], predicate = out[1], object = out[2]}
+		return node, true
 	}
 	return nil, false
 }

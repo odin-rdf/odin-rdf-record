@@ -130,8 +130,16 @@ test_apply_taxonomy :: proc(t: ^testing.T) {
 	_, _, empty := apply(&s, {})
 	testing.expect_value(t, empty, Apply_Error{.Empty, -1})
 
-	// The frozen format's gaps are typed refusals naming the op.
-	tt := rdf.Triple{alice, knows, bob}
+	// The format's remaining gaps are typed refusals naming the op. A
+	// triple term is no longer one of them (RECORD-I-0004); a language
+	// tag over 255 bytes still is, and here it sits inside a triple
+	// term, so the refusal names the op that carries the whole tree.
+	long_tag := make([]byte, 256)
+	defer delete(long_tag)
+	for i in 0 ..< len(long_tag) {
+		long_tag[i] = 'a'
+	}
+	tt := rdf.Triple{alice, knows, rdf.Literal{lexical = "x", datatype = rdf.RDF_LANG_STRING, language = string(long_tag)}}
 	bad := [2]Op{A, op(.Assert, alice, knows, &tt)}
 	_, _, uerr := apply(&s, {ops = bad[:]})
 	testing.expect_value(t, uerr, Apply_Error{.Unsupported_Term, 1})
@@ -335,7 +343,7 @@ splitmix :: proc(x: ^u64) -> u64 {
 }
 
 @(private = "file")
-vocab_make :: proc() -> (v: Vocab, owned: [dynamic]string) {
+vocab_make :: proc() -> (v: Vocab, owned: [dynamic]string, triples: [dynamic]^rdf.Triple) {
 	for i in 0 ..< len(v.subjects) {
 		s := fmt.aprintf("http://ex/s%d", i)
 		append(&owned, s)
@@ -392,6 +400,27 @@ vocab_make :: proc() -> (v: Vocab, owned: [dynamic]string) {
 		append(&owned, g)
 		v.graphs[i] = rdf.IRI(g)
 	}
+	// RDF 1.2's two kinds (RECORD-T-0023), placed after the loop so
+	// their components are terms already built — including one triple
+	// term nested inside another, the shape construct-3.ttl carries.
+	// Only the nodes are owned here; the components borrow the vocab's
+	// own strings.
+	v.objects[8] = rdf.Literal{lexical = "Wort", datatype = rdf.RDF_DIR_LANG_STRING, language = "de-CH", direction = .LTR}
+	inner := new(rdf.Triple)
+	inner^ = rdf.Triple{subject = v.subjects[0], predicate = v.predicates[0], object = v.objects[1]}
+	append(&triples, inner)
+	v.objects[16] = inner
+	outer := new(rdf.Triple)
+	outer^ = rdf.Triple{subject = v.subjects[2], predicate = v.predicates[1], object = inner}
+	append(&triples, outer)
+	v.objects[20] = outer
+	// The same triple term reached by a second route: two components
+	// equal means one term and one id, which is what makes a triple
+	// term a term rather than a structure.
+	twin := new(rdf.Triple)
+	twin^ = rdf.Triple{subject = v.subjects[0], predicate = v.predicates[0], object = v.objects[1]}
+	append(&triples, twin)
+	v.objects[23] = twin
 	return
 }
 
@@ -445,12 +474,16 @@ drive :: proc(t: ^testing.T, s: ^Store, v: ^Vocab, rounds: int, seed: u64) -> (l
 
 @(private = "file")
 equivalence :: proc(t: ^testing.T, ops: File_Ops, seed: u64) {
-	v, owned := vocab_make()
+	v, owned, triples := vocab_make()
 	defer {
 		for s in owned {
 			delete(s)
 		}
 		delete(owned)
+		for tr in triples {
+			free(tr)
+		}
+		delete(triples)
 	}
 	s: Store
 	at_open(t, &s, ops, 4096) // a small target so the log rotates under apply
@@ -515,10 +548,19 @@ sweep_apply :: proc(fs: ^OFS) -> (acked: [dynamic]Epoch) {
 	}
 	defer store_close(&s)
 	name: [4][32]byte
+	// Changeset 3 carries a triple term, so the sweep cuts through a
+	// changeset that defines terms *recursively* — several definitions
+	// for one op's object (RECORD-T-0023). A new shape for the sweep,
+	// not a new mechanism: the cut points are the same.
+	tt := rdf.Triple{iri("http://ex/t0"), iri("http://ex/p"), rdf.Literal{lexical = "v", datatype = rdf.XSD_STRING}}
 	for i in 0 ..< 4 {
 		subj := fmt.bprintf(name[i][:], "http://ex/t%d", i)
+		obj: rdf.Term = rdf.Literal{lexical = "v", datatype = rdf.XSD_STRING}
+		if i == 3 {
+			obj = &tt
+		}
 		ops := [2]Op{
-			op(.Assert, rdf.IRI(subj), iri("http://ex/p"), rdf.Literal{lexical = "v", datatype = rdf.XSD_STRING}),
+			op(.Assert, rdf.IRI(subj), iri("http://ex/p"), obj),
 			op(.Retract, iri("http://ex/t0"), iri("http://ex/p"), rdf.Literal{lexical = "v", datatype = rdf.XSD_STRING}),
 		}
 		e, _, aerr := apply(&s, {ops = ops[:2] if i == 1 else ops[:1]})
@@ -796,3 +838,80 @@ test_apply_validator_modes :: proc(t: ^testing.T) {
 	same_projection(t, &b, &b2)
 }
 
+
+
+@(test)
+test_apply_triple_terms :: proc(t: ^testing.T) {
+	// RECORD-T-0023's three properties that are not about bytes: a
+	// triple term is a *term* (identical to itself, one id), it is not
+	// a quad (mentioning it twice is fine, asserting a quad twice is
+	// not), and a recursion that refuses leaves nothing behind.
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
+	s: Store
+	at_open(t, &s, mem_file_ops(&fs))
+	defer store_close(&s)
+
+	alice, knows, bob := iri("http://ex/alice"), iri("http://ex/knows"), iri("http://ex/bob")
+	reifies, r1, r2 := iri("http://ex/reifies"), iri("http://ex/r1"), iri("http://ex/r2")
+
+	// Two structurally equal triple terms, built independently.
+	one := rdf.Triple{alice, knows, bob}
+	two := rdf.Triple{alice, knows, bob}
+	ops := [2]Op{op(.Assert, r1, reifies, &one), op(.Assert, r2, reifies, &two)}
+	e, _, err := apply(&s, {ops = ops[:]})
+	testing.expect_value(t, err, Apply_Error{})
+	testing.expect_value(t, e, Epoch(1))
+
+	// Two quads, one term: mentioning the same triple term twice is not
+	// asserting the same quad twice, so .Already_Live does not fire.
+	testing.expect_value(t, s.n_facts, u32(2))
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+	id1, ok1 := snapshot_resolve(snap, &one)
+	id2, ok2 := snapshot_resolve(snap, &two)
+	testing.expect(t, ok1 && ok2 && id1 == id2, "structurally equal triple terms are one term and one id")
+
+	// The components are terms of their own, and each is numbered below
+	// the triple term that names them — par. 5.2's ordering rule as the
+	// intern produced it.
+	for c in ([3]rdf.Term{alice, knows, bob}) {
+		cid, cok := snapshot_resolve(snap, c)
+		testing.expect(t, cok && cid < id1, "a component is defined before the term naming it")
+	}
+
+	// Nesting, and the same quad twice is still refused.
+	outer := rdf.Triple{r1, reifies, &one}
+	nested := [2]Op{op(.Assert, r2, knows, &outer), op(.Assert, r2, knows, &outer)}
+	_, _, derr := apply(&s, {ops = nested[:]})
+	testing.expect_value(t, derr, Apply_Error{.Already_Live, 1})
+
+	// A changeset whose third op refuses, after two triple terms have
+	// interned recursively: nothing committed, nothing left in the
+	// dictionary, the projection exactly as it was.
+	before_terms, before_facts, before_epochs := len(s.dict.off), s.n_facts, s.n_epochs
+	long_tag := make([]byte, 256)
+	defer delete(long_tag)
+	for i in 0 ..< len(long_tag) {
+		long_tag[i] = 'a'
+	}
+	t1 := rdf.Triple{iri("http://ex/new1"), knows, bob}
+	t2 := rdf.Triple{iri("http://ex/new2"), knows, bob}
+	t3 := rdf.Triple{iri("http://ex/new3"), knows, rdf.Literal{lexical = "x", datatype = rdf.RDF_LANG_STRING, language = string(long_tag)}}
+	partial := [3]Op{
+		op(.Assert, r1, knows, &t1),
+		op(.Assert, r1, knows, &t2),
+		op(.Assert, r1, knows, &t3),
+	}
+	_, _, perr := apply(&s, {ops = partial[:]})
+	testing.expect_value(t, perr, Apply_Error{.Unsupported_Term, 2})
+	testing.expect_value(t, len(s.dict.off), before_terms)
+	testing.expect_value(t, s.n_facts, before_facts)
+	testing.expect_value(t, s.n_epochs, before_epochs)
+
+	// Replay agrees with what apply built, both new term kinds included.
+	s2: Store
+	at_open(t, &s2, mem_file_ops(&fs))
+	defer store_close(&s2)
+	same_projection(t, &s, &s2)
+}

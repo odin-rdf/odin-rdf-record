@@ -392,9 +392,12 @@ ex:alice a ex:Person ; ex:name "Alice"@en ; ex:age 42 ; ex:knows [ ex:name "Bob"
 }
 
 @(test)
-test_ingest_triple_term_refused_at_apply :: proc(t: ^testing.T) {
-	// RDF 1.2's triple terms parse (the format is the parser's) and the
-	// op is emitted; the store refuses it — where the stance put the gap.
+test_ingest_triple_term_commits :: proc(t: ^testing.T) {
+	// Was test_ingest_triple_term_refused_at_apply, and inverted by
+	// RECORD-T-0023 rather than deleted: it is the most precise
+	// statement in this repository of what the gap was, so it is now the
+	// most precise statement that the gap is closed. Same document, same
+	// three ops, same op carrying the triple term — and it commits.
 	fs: rec.Mem_FS
 	defer rec.mem_fs_destroy(&fs)
 	s: rec.Store
@@ -402,7 +405,7 @@ test_ingest_triple_term_refused_at_apply :: proc(t: ^testing.T) {
 	defer rec.store_close(&s)
 	doc := read(t, W3C + "/rdf12-turtle-eval/turtle12-eval-bnode-01.ttl")
 	defer delete(doc)
-	ops, err := ingest.turtle(doc, nil, context.allocator, base = "http://example/")
+	ops, err := ingest.turtle(doc, nil, context.allocator, base = "http://example/", blank_prefix = "tt_")
 	defer ingest.ops_destroy(ops, context.allocator)
 	testing.expect_value(t, err.kind, ingest.Error_Kind.None)
 	// RDF 1.2: << >> is a reifier, so the second statement expands to
@@ -416,9 +419,27 @@ test_ingest_triple_term_refused_at_apply :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, at >= 0, "one op carries the triple term")
-	_, _, aerr := rec.apply(&s, {ops = ops})
-	testing.expect_value(t, aerr, rec.Apply_Error{.Unsupported_Term, at})
-	testing.expect_value(t, s.n_epochs, u32(0))
+	e, _, aerr := rec.apply(&s, {ops = ops})
+	testing.expect_value(t, aerr, rec.Apply_Error{})
+	testing.expect_value(t, e, rec.Epoch(1))
+	testing.expect_value(t, s.n_epochs, u32(1))
+	testing.expect_value(t, s.n_facts, u32(3))
+
+	// The triple term is a term: resolvable, and the fact carrying it
+	// matches on its id.
+	snap, serr := rec.store_latest(&s)
+	testing.expect_value(t, serr, rec.Snapshot_Error.None)
+	defer rec.snapshot_release(&snap)
+	id, found := rec.snapshot_resolve(snap, ops[at].object)
+	testing.expect(t, found && id != 0, "the triple term resolves to an id")
+	testing.expect(t, rec.snapshot_exists(snap, {o = id}, {origin = .Any}), "a pattern binding it matches")
+
+	// And its blank-node components carry the document's scope, which is
+	// what makes two documents loadable side by side (RECORD-T-0023).
+	tr := ops[at].object.(^rdf.Triple)
+	if b, is_blank := tr.subject.(rdf.Blank_Node); is_blank {
+		testing.expect(t, strings.has_prefix(string(b), "tt_"), "a blank node inside a triple term is scoped")
+	}
 }
 
 RT_DIR :: "build/ingest/roundtrip"
