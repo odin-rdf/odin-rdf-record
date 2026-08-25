@@ -86,8 +86,7 @@ a format change is exactly the kind of event that would quietly erode it.
       `v0.3.0` was cut one commit early and `RECORD-T-0020`'s own title
       records that as a regret. The risk note below was honoured to the
       letter: the consumer built against the commit before the tag
-      existed (see the section after next). The tag is local and **not
-      pushed**, along with the commits it names.
+      existed (see the section after next). **Published** at `435c2b3`.
 - [x] **The consumer told what it got.** A short note — in this task's
       Status, where `SPARQL-I-0003`'s author will look — naming the
       procedures added, the ownership rule for a decoded triple term, the
@@ -357,11 +356,10 @@ Recorded, not acted on: no consumer has asked.
 ### The tag, cut
 
 Annotated, with the body below plus one line naming the consumer that
-built against it first, and placed at this initiative's last commit so
-that the consumer's verdict is inside it rather than one commit past it.
-Local; **not pushed**, and neither are the commits under it. sparql's
-`ci.yml` already pins `v0.4.0`, so that job cannot go green until both
-are on GitHub.
+built against it first, and placed so that the consumer's verdict is
+inside it rather than one commit past it — the reverse of `v0.3.0`'s
+mistake. **Published** at `435c2b3`, tag and commits both; sparql's
+`ci.yml` pins `v0.4.0` and resolves it.
 
 ### The tag, as prepared
 

@@ -379,6 +379,43 @@ entries reachable.
 
 ## Status
 
+**2026-08-25 — complete. The consumer approved it, and `v0.4.0` is cut.**
+All five tasks are done and every exit criterion is met: both new term
+kinds encode, intern, replay, resolve and decode; the Python verifier
+agrees over the fault corpus having taken one constant's change and no
+encoding change; the documents are amended rather than diverged; and the
+tag exists.
+
+**The consumer's verdict, which is what the tag was waiting on.**
+`RECORD-T-0025`'s risk note said not to tag before a consumer had
+compiled against this, so odin-rdf-sparql's `SPARQL-T-0030` built
+against the untagged head first. It reads a triple-term data file out of
+its *own* vendored `sparql12-eval-triple-terms` suite — the file `apply`
+used to refuse with `{.Unsupported_Term, 0}` — ingests it, applies it
+clean, and walks `snapshot_triple_parts` two levels down through a
+nested triple term to an inlined component, allocating nothing. Its full
+suite stayed **512/512 at both widths** with the `record:` collection
+added. So §Context's "cheaper here than what is being left behind" is
+now demonstrated by the consumer rather than argued by us: the
+`triple_adapter` this replaces materialized the whole term and
+re-resolved each component.
+
+**`v0.4.0`**, annotated, at `435c2b3`, and **published** —
+`odin-rdf/odin-rdf-record` carries the tag and the commits under it.
+sparql's `ci.yml` pins it, so that job resolves. One note for anyone
+reading the tag: this Status block is the commit *after* it, so `v0.4.0`
+holds every source and document change of the initiative but not this
+paragraph. That is the reverse of `v0.3.0`'s mistake and is deliberate —
+a tag is not moved once it is published.
+
+**One thing recorded and not acted on**, from the consumer: an inlined
+literal's id is `>= CONSUMER_ID_FIRST`, so a consumer testing "is this
+one of my own ids?" with a bare `>=` threshold misclassifies an ordinary
+term. `resident.odin:42` states the range with both ends, so the API is
+not at fault — but this is the second consumer-side trap in that area,
+which is weak evidence that an `is_consumer_id(id)` helper would earn
+its keep. Nobody has asked for one.
+
 **2026-08-24 — filed on behalf of the consumer.** Created from odin-rdf-sparql's
 `SPARQL-I-0003` after the family owner chose to gate that port on this
 capability. The evidence, the corpus facts and the "already reserved" finding are
