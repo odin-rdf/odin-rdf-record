@@ -4,14 +4,14 @@ level: task
 title: "The proof layer and the documents: both verifiers agreeing, reserved becomes built, a tag cut"
 short_code: "RECORD-T-0025"
 created_at: 2026-08-24T20:42:56.281837+00:00
-updated_at: 2026-08-24T22:11:04.890025+00:00
+updated_at: 2026-08-25T09:30:01.321700+00:00
 parent: RECORD-I-0004
 blocked_by: [RECORD-T-0024]
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -75,10 +75,19 @@ a format change is exactly the kind of event that would quietly erode it.
       permutations; the fact table; `Filter`; visibility; the epoch
       table. "Nothing else changed" is the claim this store's proof layer
       exists to make checkable.
-- [ ] **A release tagged**, annotated, `Release vX: title` with a
+- [x] **A release tagged**, annotated, `Release vX: title` with a
       bulleted body — the owner's act, prepared here. The consumer
       (`SPARQL-T-0035`) pins it, so the tag is this initiative's actual
       deliverable to the outside.
+      **Done 2026-08-25**: `v0.4.0`, annotated, at this initiative's
+      last commit rather than at the source commit `77982ce`, so that
+      everything this task wrote — the measurement, the document
+      amendments and the consumer's verdict — is inside the tag.
+      `v0.3.0` was cut one commit early and `RECORD-T-0020`'s own title
+      records that as a regret. The risk note below was honoured to the
+      letter: the consumer built against the commit before the tag
+      existed (see the section after next). The tag is local and **not
+      pushed**, along with the commits it names.
 - [x] **The consumer told what it got.** A short note — in this task's
       Status, where `SPARQL-I-0003`'s author will look — naming the
       procedures added, the ownership rule for a decoded triple term, the
@@ -310,7 +319,51 @@ still always resolve. **Triple terms are no longer refused by `apply`**,
 so the 20 vendored data files that carry them load; that recorded backend
 limit is gone.
 
-### The tag, prepared
+### 2026-08-25 — the consumer built against it, and the tag is cut
+
+The risk note said not to tag before a consumer had compiled against
+this, and odin-rdf-sparql's `SPARQL-T-0030` did exactly that before the
+tag existed. What it verified, on the commit rather than on a tag:
+
+- **The `record:` collection resolves and the library links** from a
+  repository that is not this one — `Makefile`, `ols.json` and a new
+  `tests/smoke` package, `make check` clean.
+- **This repository's promise held against the consumer's own corpus,
+  not against fixtures written here.** `tests/smoke` reads
+  `tests/w3c/sparql12-eval-triple-terms/data-0-tripleterms.ttl` out of
+  sparql's vendored suite — the file `apply` used to refuse with
+  `{.Unsupported_Term, 0}` — ingests it, applies it clean, and walks
+  `snapshot_triple_parts` down through the nested triple term to the
+  inlined `123` at the bottom. Two levels of recursion, an inlined
+  component, no allocation. That is `RECORD-I-0004`'s §7 consumer ask
+  answered by the consumer rather than by us.
+- **`snapshot_kind` answers `.Triple`, `snapshot_term_destroy` pairs
+  with `snapshot_term`, and `ingest` set-semantics still holds.** All
+  four verbs `RECORD-T-0024` added are exercised from outside.
+- sparql's full suite is still **512/512 at both widths** with the
+  collection added — this store's arrival broke nothing that was
+  already there.
+
+**One thing the consumer found that is worth this repository knowing**,
+though it is sparql's bug and not ours: an inlined literal's id is
+`>= CONSUMER_ID_FIRST`, so a consumer testing "is this one of my own
+synthetic ids?" with a bare `>=` threshold misclassifies an ordinary
+inlined term. `resident.odin:42`'s comment states the range with both
+ends, so the API is not at fault — but it is the second consumer-side
+trap in this area (`SPARQL-T-0027` was the first), which is weak
+evidence that a `is_consumer_id(id)` helper would be earning its keep.
+Recorded, not acted on: no consumer has asked.
+
+### The tag, cut
+
+Annotated, with the body below plus one line naming the consumer that
+built against it first, and placed at this initiative's last commit so
+that the consumer's verdict is inside it rather than one commit past it.
+Local; **not pushed**, and neither are the commits under it. sparql's
+`ci.yml` already pins `v0.4.0`, so that job cannot go green until both
+are on GitHub.
+
+### The tag, as prepared
 
 Not cut — this is the owner's act, and `RECORD-T-0025`'s own risk note
 says not to tag before a consumer has built against it. Offering
