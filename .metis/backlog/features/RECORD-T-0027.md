@@ -117,8 +117,23 @@ went looking for, exact where it expected an estimate that could decline.
 generalizing: the surface was designed correctly for the operation, and
 the mismatch was in the *semantics of the values flowing through it*.
 Designing an API for a consumer is not the same as the consumer being
-able to use it, and no amount of consultation would have surfaced this
-earlier than a working engine did.
+able to use it **for the thing it was wanted for**, and no amount of
+consultation would have surfaced this earlier than a working engine did.
+
+**Scoped 2026-08-25, later the same day, and the correction matters to
+this store more than to the consumer.** The paragraph above, and this
+note's title, are about `ORDER BY`. They should not be read as
+"`snapshot_match_as` is unusable" — **it is not**, and odin-rdf-sparql
+briefly closed its own backlog item on that over-reading before catching
+it. Every consumer needing a **consistent total order** rather than
+SPARQL's order is unaffected by everything in this note: a **merge
+join** over two windows named with `snapshot_match_as` works exactly as
+designed, and so does clustering for `DISTINCT` and `GROUP BY`. The ids
+never have to mean anything for those. odin-rdf-sparql's `SPARQL-T-0029`
+is reopened for the merge join and needs nothing new from this store.
+
+So the honest summary of the ordered-read surface is: **right for joins,
+inert for ordering.** Only the second half is what this note is about.
 
 ## Status Updates **[REQUIRED]**
 
