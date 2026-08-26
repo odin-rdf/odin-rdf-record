@@ -4,7 +4,7 @@ level: task
 title: "Filter.graphs: an empty set reads every graph, by allocation history — scope must be stated like origin is"
 short_code: "RECORD-T-0029"
 created_at: 2026-08-26T21:29:05.621624+00:00
-updated_at: 2026-08-26T21:50:39.151562+00:00
+updated_at: 2026-08-26T22:23:23.724873+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -12,7 +12,7 @@ archived: false
 tags:
   - "#task"
   - "#bug"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -166,7 +166,7 @@ untyped compound literals `{origin = .Any}` do not name the type.)*
       what moved and why.
 - [x] The record's own suites updated to state scope; `make test` and
       `make check` green; both verifiers untouched (no format change).
-- [ ] Tagged, with release notes naming the five consumer sites; the
+- [x] Tagged, with release notes naming the five consumer sites; the
       family's release convention walked — pins bumped, each consumer's
       Current State re-read.
 
@@ -261,3 +261,15 @@ untyped compound literals `{origin = .Any}` do not name the type.)*
   gaining "and scope", and `SPARQL-T-0044`/`SHACL-T-0039` being written
   against the new `Filter`. The task stays active until those are
   decided.
+- **2026-08-27 — Tagged and walked; complete.** `v0.5.0` is an annotated
+  tag at `6bc27c4`, pushed, its notes naming the ten sites and the
+  thread hazard. The walk, the same day: odin-rdf-sparql
+  (`SPARQL-T-0045` — three sites state `.All`, pin `v0.5.0`, W3C survey
+  unchanged at 546 of 556, `make check` clean) and odin-rdf-shacl
+  (`SHACL-T-0040` — seven sites, floor `v0.5.0`, 98/98, no verdict
+  moves); `SPARQL-T-0044` and `SHACL-T-0039` each told that the record's
+  own `Graph_Scope` is now their unscoped/scoped distinction. The family
+  file's read-side line says "and scope", its record section carries the
+  release, and both engines' headings and floors are re-read. The
+  record's vision gains the release beside the `RECORD-I-0004` entry,
+  which described `v0.4.0` without naming the tag — named now.

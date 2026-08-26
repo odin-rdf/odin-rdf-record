@@ -140,6 +140,24 @@ their side, once that API is real.
 > what it means to *assert* versus *mention* a triple term. A triple term is a
 > term; mentioning one asserts nothing.
 
+> **Amended 2026-08-27 (`v0.5.0`, `RECORD-T-0029`): the first release cut for
+> the application rather than for an engine, and the entry above is `v0.4.0`,
+> tagged 2026-08-25 at `39be085` — that entry described the release without
+> naming the tag.** The application's workspace design (a named graph per
+> workspace, a read scope computed per request as a graph set that is an
+> authorization ceiling) was the first consumer to design a *computed*
+> `Filter.graphs`, and `Filter.graphs` decided scoped-versus-unscoped by
+> whether the slice was nil — which Odin makes a fact about allocation
+> history, so the same empty set read every graph or nothing. `Filter` now
+> carries `scope: Graph_Scope { All, Set }` beside `origin`, under `origin`'s
+> rule: no valid zero, refused at the first read; under `.Set` the length
+> alone decides. An API change and not a format change — permutations and log
+> untouched, both verifiers unchanged, the scale numbers unmoved. Tagged
+> `v0.5.0` at `6bc27c4`; both engines walked the same day (ten sites state
+> `.All`, nothing else moves). Filed beside it from the same design and not
+> yet built: `RECORD-T-0028`, a seventh order `GPOS` so that "which Risks are
+> in this workspace" is a prefix rather than a scan over every Risk.
+
 ## Future State
 
 An embedded store where:
