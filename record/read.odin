@@ -112,9 +112,11 @@ Scan :: struct {
 
 // snapshot_match answers a pattern as one prefix range, choosing the
 // permutation api.md par. 12.2 prescribes: the order whose key starts
-// with the pattern's bound components, G never among them — a bound
-// graph is always residual (RECORD-A-0004), one comparison against a
-// field the visibility test already loaded. Two binary searches per
+// with the pattern's bound components. G leads exactly one order,
+// GPOS, chosen only when G is bound, S is not, and O is not bound
+// without P (RECORD-T-0028, on RECORD-A-0004's own review trigger);
+// everywhere else a bound graph is residual — one comparison against
+// a field the visibility test already loaded. Two binary searches per
 // bound prefix; a pattern this snapshot's terms cannot satisfy simply
 // finds an empty window.
 snapshot_match :: proc(snap: Snapshot, p: Pattern) -> Range {
@@ -132,14 +134,17 @@ snapshot_match :: proc(snap: Snapshot, p: Pattern) -> Range {
 snapshot_match_as :: proc(snap: Snapshot, p: Pattern, order: Order) -> Range {
 	assert(snap.idx != nil, "snapshot_match_as: a released snapshot")
 	key := order_key(order)
-	want: [3]Term_ID
+	want: [4]Term_ID
 	k := 0
-	for ; k < 3; k += 1 {
+	for ; k < 4; k += 1 {
 		v := pattern_component(p, key[k])
 		if v == 0 {
 			break
 		}
-		want[k] = v
+		// A pattern binds the default graph as MATCH_DEFAULT_GRAPH and
+		// a fact stores it as 0; the prefix compares against what facts
+		// store, and the bound test above needed the spelling.
+		want[k] = 0 if key[k] == .G && v == MATCH_DEFAULT_GRAPH else v
 	}
 	ids := snap.idx.ord[order]
 	lo := prefix_bound(snap.idx, ids, key, want, k, false)
@@ -427,27 +432,40 @@ snapshot_term_destroy :: proc(snap: Snapshot, id: Term_ID, t: rdf.Term, allocato
 
 // choose_order is api.md par. 12.2's table: the order whose key leads
 // with the bound components, longest prefix first, SPOG for the full
-// scan. G never enters the choice.
+// scan. G enters the choice in exactly one case (RECORD-T-0028): bound,
+// with S unbound and O not bound without P, it leads — GPOS answers
+// "everything in this graph", "every P in it" and "instances of a
+// class in it" with a window that is exactly the answer, where the
+// residual compare scanned every such fact in the store. With S bound
+// the SPO family is selective enough that the residual is noise, and
+// (G, O) alone stays O-first for the same reason.
 @(private = "file")
 choose_order :: proc(p: Pattern) -> (o: Order, k: int) {
-	bs, bp, bo := p.s != 0, p.p != 0, p.o != 0
+	bs, bp, bo, bg := p.s != 0, p.p != 0, p.o != 0, p.g != 0
 	switch {
 	case bs && bp:
 		return .SPOG, 3 if bo else 2
 	case bs && bo:
 		return .SOPG, 2
-	case bp && bo:
-		return .POSG, 2
 	case bs:
 		return .SPOG, 1
+	case bg && bp:
+		return .GPOS, 3 if bo else 2
+	case bp && bo:
+		return .POSG, 2
 	case bp:
 		return .PSOG, 1
 	case bo:
 		return .OSPG, 1
+	case bg:
+		return .GPOS, 1
 	}
 	return .SPOG, 0
 }
 
+// pattern_component reads one position of a pattern as spelled — for
+// G that is MATCH_DEFAULT_GRAPH when the default graph is bound, which
+// snapshot_match_as maps to the stored 0 as it enters the prefix.
 @(private = "file")
 pattern_component :: proc(p: Pattern, c: Component) -> Term_ID {
 	switch c {
@@ -458,7 +476,7 @@ pattern_component :: proc(p: Pattern, c: Component) -> Term_ID {
 	case .O:
 		return p.o
 	case .G:
-		return 0 // G never enters a prefix (RECORD-A-0004)
+		return p.g
 	}
 	unreachable()
 }
@@ -467,7 +485,7 @@ pattern_component :: proc(p: Pattern, c: Component) -> Term_ID {
 // prefix window: the first index whose fact compares >= the wanted
 // prefix (upper false), or > it (upper true).
 @(private = "file")
-prefix_bound :: proc(set: ^Index_Set, ids: []Fact_ID, key: [4]Component, want: [3]Term_ID, k: int, upper: bool) -> int {
+prefix_bound :: proc(set: ^Index_Set, ids: []Fact_ID, key: [4]Component, want: [4]Term_ID, k: int, upper: bool) -> int {
 	lo, hi := 0, len(ids)
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)

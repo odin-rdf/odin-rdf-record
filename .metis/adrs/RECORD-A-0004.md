@@ -47,6 +47,21 @@ the escape hatch is a per-graph sorted `[]FactID` posting list — 1.6 MB
 total, since every fact is in exactly one graph — never three more full
 permutations.
 
+**Amended 2026-08-27 (RECORD-T-0028): the escape hatch was spent, as one
+graph-first order, on this decision's own review trigger — ahead of the
+measurement it asks for, on a consumer's stated query shape.** The consumer is
+the application's workspace design (a named graph per workspace; the read scope
+a graph set), and the shape is `GRAPH <W> { ?r a risk:Risk }` — G, P, O bound —
+required not to scan every Risk in the store. The posting list as written above,
+sorted by fact id, answers `(G)` alone; that shape needs POS order within each
+graph, and per-graph POS-ordered lists laid end to end *are* the `GPOS`
+permutation. So `Order` has a seventh member, `GPOS`, built through the same
+radix sort, 4 bytes per fact — one order, not §9's three, and "never three more
+full permutations" holds. `choose_order` lets `G` lead in exactly one case:
+bound, with S unbound and O not bound without P. Everything with S bound keeps
+this decision's rule. The negative consequence below is answered for `(G)`,
+`(G,P)` and `(G,P,O)`; the format is untouched; the measurement is in the task.
+
 ## Rationale
 
 Join-order coverage is what the downstream engines need: merge joins want
@@ -70,6 +85,8 @@ provides at negligible cost.
 - `GRAPH <g> { ?s ?p ?o }` with nothing else bound scans the whole SPOG
   order and filters, rather than seeking a `G` prefix. At 4×10⁵ facts that
   is the ~10 ms full-scan ceiling, acceptable per the scale premise.
+  *(No longer: since RECORD-T-0028 it is a `GPOS` prefix, as are `(G,P)` and
+  `(G,P,O)`. `(G,O)` and every S-bound shape are as this bullet describes.)*
 
 ### Neutral
 - `Filter.Graphs` (graph *sets*, for `FROM`/`FROM NAMED`) is unaffected —

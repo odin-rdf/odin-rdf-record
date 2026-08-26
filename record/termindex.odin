@@ -1,5 +1,5 @@
 // The term index (RECORD-T-0014): the dictionary's ids sorted by their
-// canonical encoding — the seventh sorted array beside the six
+// canonical encoding — the eighth sorted array beside the seven
 // permutations, and the only term lookup on the read side (RECORD-I-0003
 // decision 2, amending api.md par. 4 and par. 12.7). It replaced a map
 // the writer mutated while readers probed it; an array built by the
@@ -12,7 +12,7 @@
 // Built once at boot by sorting (store_build_term_index), and per
 // commit by merging the few new ids into a fresh array
 // (store_merge_term_index) — an O(n) copy the flat copy-on-write of
-// RECORD-A-0005 already pays six times over for the permutations. The
+// RECORD-A-0005 already pays seven times over for the permutations. The
 // order is plain byte order over encodings: it need not mean anything,
 // only be total and agree between the sort and the search, which one
 // comparison procedure guarantees.

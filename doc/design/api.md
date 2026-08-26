@@ -546,6 +546,9 @@ standing CPU cost across all of them, and removing it is worth as much as the
 Unchanged, and untouched by everything above: six sorted `[]FactID` slices,
 4 bytes per fact per order, 9.6 MB at 4×10⁵ facts.
 
+*Amended 2026-08-27 (RECORD-T-0028): **seven** — `GPOS` joined them, 11.2 MB at
+4×10⁵ facts. §5.1's note says why, and the task carries the measurement.*
+
 `architecture.md` §Scale's argument for taking all six — every sort order for
 merge joins, every variable order for §7.4's worst-case-optimal joins — was made
 on the grounds that six is free. Under the density premise six is not free, and
@@ -585,6 +588,19 @@ is a small fraction of the facts, where a graph-first prefix genuinely narrows.
 The cheap answer there is a per-graph sorted `[]FactID` posting list, not three
 more full permutations — every fact is in exactly one graph, so all the posting
 lists together cost 1.6 MB, one order's worth of memory instead of three.
+
+*Amended 2026-08-27 (RECORD-T-0028): **the escape hatch was spent, as one
+graph-first order.** The consumer was the application's workspace design — a
+named graph per workspace — and its stated requirement was "which `risk:Risk`
+are in this workspace" (`GRAPH <W> { ?r a risk:Risk }`: G, P, O bound) without
+scanning every Risk in the store. A posting list sorted by fact id answers `(G)`
+alone; that shape needs POS order *within* each graph, and per-graph POS-ordered
+lists laid end to end are the `GPOS` permutation — so it was built as a seventh
+`Order` through the existing radix sort, 4 bytes per fact, one order's worth of
+memory as this paragraph priced it. `G` leads exactly one order and is chosen
+only when it is bound, S is not, and O is not bound without P; everything with
+S bound stays on the SPO family with G residual, as argued above. The format is
+untouched.*
 
 ### 5.2 How a permutation absorbs an insert
 
@@ -966,6 +982,12 @@ appended as the final tiebreaker (§5.1). Every triple pattern is prefix-covered
 | `S?O` | SOPG | 2 |
 | `?PO` | POSG | 2 |
 | `SPO` | SPOG | 3 |
+
+*Amended 2026-08-27 (RECORD-T-0028): a seventh order and four more rows — `G??`
+GPOS 1, `GP?` GPOS 2, `GPO` GPOS 3, and `G?O` stays OSPG 1 with G residual; any
+shape with S bound is unchanged. The paragraph below is now true of six orders
+and false of one. The default graph is spelled `MATCH_DEFAULT_GRAPH` in a
+pattern and stored as 0; `MatchAs` maps it as it enters the prefix.*
 
 `G` never enters the prefix, so a bound graph is always residual — one comparison
 against a field in a `Fact` the walk has already loaded to evaluate

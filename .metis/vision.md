@@ -156,7 +156,12 @@ their side, once that API is real.
 > `v0.5.0` at `6bc27c4`; both engines walked the same day (ten sites state
 > `.All`, nothing else moves). Filed beside it from the same design and not
 > yet built: `RECORD-T-0028`, a seventh order `GPOS` so that "which Risks are
-> in this workspace" is a prefix rather than a scan over every Risk.
+> in this workspace" is a prefix rather than a scan over every Risk. *(Built
+> the same day, on `main` and unreleased: `Order.GPOS`, chosen when G is
+> bound, S is not, and O is not bound without P; +1.6 MB at 4×10⁵ facts,
+> +12 ms on the sort, +5 ms mean per commit; `RECORD-A-0004` amended on its
+> own review trigger, `RECORD-T-0026`'s shape answered. Whether it is
+> `v0.6.0` alone is the owner's call.)*
 
 ## Future State
 

@@ -1,5 +1,6 @@
 package record
 
+import "core:fmt"
 import "core:slice"
 import "core:testing"
 
@@ -295,6 +296,121 @@ test_read_graph_scope_empty :: proc(t: ^testing.T) {
 	testing.expect(t, slice.equal(got[:], want[:]), "a one-graph set admits exactly its graph")
 }
 
+// RECORD-T-0028: the graph-first order. Two workspaces and the default
+// graph, built through the writer and replay like rt_build's store:
+// terms 1 = rdf:type, 2 = mitigatedBy, 3 = Risk, 4 = Control, 5 = W,
+// 6 = V, 7..9 W's subjects, 10..12 V's, 13 the default graph's.
+//
+//	f0 (7,1,3,W)   f1 (8,1,3,W)   f2 (9,1,4,W)   f7 (8,2,9,W)
+//	f3 (10,1,3,V)  f4 (11,1,3,V)  f5 (12,1,3,V)
+//	f6 (13,1,3,0)
+@(test)
+test_read_graph_prefix :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	w, werr := writer_create("store", ofs_ops(&fs), SEGMENT_TARGET_SIZE)
+	testing.expect_value(t, werr, Writer_Error.None)
+	terms: [13]Term_Def
+	encs: [13]string
+	for i in 0 ..< 13 {
+		encs[i] = fmt.aprintf("\x01http://ex/t%d", i + 1)
+		terms[i] = {id = u64(i + 1), enc = transmute([]byte)encs[i]}
+	}
+	defer for e in encs {
+		delete(e)
+	}
+	ops := [8]Fact_Op{
+		{op = .Assert, s = 7, p = 1, o = 3, g = 5},
+		{op = .Assert, s = 8, p = 1, o = 3, g = 5},
+		{op = .Assert, s = 9, p = 1, o = 4, g = 5},
+		{op = .Assert, s = 10, p = 1, o = 3, g = 6},
+		{op = .Assert, s = 11, p = 1, o = 3, g = 6},
+		{op = .Assert, s = 12, p = 1, o = 3, g = 6},
+		{op = .Assert, s = 13, p = 1, o = 3, g = 0},
+		{op = .Assert, s = 8, p = 2, o = 9, g = 5},
+	}
+	testing.expect_value(t, writer_commit(&w, {epoch = 1, wall = OWALL, terms = terms[:], ops = ops[:]}), Writer_Error.None)
+	writer_destroy(&w)
+
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	ld: Loader
+	loader_init(&ld, &s)
+	defer loader_destroy(&ld)
+	_, _, err := replay("store", ofs_ops(&fs), loader_consumer(&ld))
+	testing.expect_value(t, err, Open_Error.None)
+	store_build_permutations(&s)
+	store_build_term_index(&s)
+	store_publish(&s)
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+	all := Filter{origin = .Any, scope = .All}
+
+	// The consumer's shape: instances of a class in one graph. The
+	// window is exactly the answer, where (P, O) alone is every Risk in
+	// the store, and it walks in S order.
+	r := snapshot_match(snap, {g = 5, p = 1, o = 3})
+	testing.expect_value(t, r.order, Order.GPOS)
+	testing.expect_value(t, range_len(r), 2)
+	testing.expect_value(t, range_len(snapshot_match(snap, {p = 1, o = 3})), 6)
+	{
+		sc := range_iter(r, all)
+		prev := Term_ID(0)
+		n := 0
+		for id in scan_next(&sc) {
+			f := snapshot_fact(snap, id)
+			testing.expect(t, f.s > prev, "a (G,P,O) window ascends in S")
+			prev = f.s
+			n += 1
+		}
+		testing.expect_value(t, n, 2)
+	}
+	rv := snapshot_match(snap, {g = 6, p = 1, o = 3})
+	testing.expect_value(t, rv.order, Order.GPOS)
+	testing.expect_value(t, range_len(rv), 3)
+
+	// The default graph is a GPOS prefix too — spelled
+	// MATCH_DEFAULT_GRAPH, stored 0.
+	rd := snapshot_match(snap, {g = MATCH_DEFAULT_GRAPH, p = 1, o = 3})
+	testing.expect_value(t, rd.order, Order.GPOS)
+	testing.expect_value(t, range_len(rd), 1)
+	got := scan_collect(rd, all)
+	testing.expect(t, len(got) == 1 && got[0] == 6, "the default graph's one Risk")
+	delete(got)
+
+	// (G) and (G, P) are prefixes; (G, O) and anything with S are not.
+	testing.expect_value(t, range_len(snapshot_match(snap, {g = 5})), 4)
+	testing.expect_value(t, range_len(snapshot_match(snap, {g = 5, p = 1})), 3)
+	ro := snapshot_match(snap, {g = 5, o = 3})
+	testing.expect_value(t, ro.order, Order.OSPG)
+	testing.expect_value(t, range_len(ro), 6)
+	got = scan_collect(ro, all)
+	testing.expect(t, len(got) == 2, "residual G still filters the O window")
+	delete(got)
+	rs := snapshot_match(snap, {s = 8, g = 5})
+	testing.expect_value(t, rs.order, Order.SPOG)
+	got = scan_collect(rs, all)
+	want := [2]Fact_ID{1, 7}
+	testing.expect(t, slice.equal(got[:], want[:]), "S-bound stays on the SPO family and answers")
+	delete(got)
+
+	// A planner naming POSG gets the same answer from a 3x window.
+	rp := snapshot_match_as(snap, {g = 5, p = 1, o = 3}, .POSG)
+	testing.expect_value(t, range_len(rp), 6)
+	got = scan_collect(rp, all)
+	want2 := [2]Fact_ID{0, 1}
+	testing.expect(t, slice.equal(got[:], want2[:]), "any order answers any pattern")
+	delete(got)
+
+	// Pattern.g and Filter.graphs intersect: W's window under a set
+	// naming only V admits nothing.
+	only_v := [1]Term_ID{6}
+	got = scan_collect(r, Filter{origin = .Any, scope = .Set, graphs = only_v[:]})
+	testing.expect_value(t, len(got), 0)
+	delete(got)
+}
+
 @(test)
 test_read_order_selection :: proc(t: ^testing.T) {
 	fs: OFS
@@ -306,8 +422,9 @@ test_read_order_selection :: proc(t: ^testing.T) {
 	snap, _ := store_latest(&s)
 	defer snapshot_release(&snap)
 
-	// api.md par. 12.2's table, shape by shape; G never changes the
-	// choice.
+	// api.md par. 12.2's table, shape by shape. G leads exactly when
+	// it is bound, S is not, and O is not bound without P
+	// (RECORD-T-0028); every other shape is as it was.
 	cases := [?]struct {
 		p:    Pattern,
 		want: Order,
@@ -320,7 +437,13 @@ test_read_order_selection :: proc(t: ^testing.T) {
 		{{s = 1, o = 3}, .SOPG},
 		{{p = 2, o = 3}, .POSG},
 		{{s = 1, p = 2, o = 3}, .SPOG},
-		{{p = 2, g = 4}, .PSOG},
+		{{g = 4}, .GPOS},
+		{{g = MATCH_DEFAULT_GRAPH}, .GPOS},
+		{{p = 2, g = 4}, .GPOS},
+		{{p = 2, o = 3, g = 4}, .GPOS},
+		{{o = 3, g = 4}, .OSPG},
+		{{s = 1, g = 4}, .SPOG},
+		{{s = 1, p = 2, o = 3, g = 4}, .SPOG},
 	}
 	for c in cases {
 		testing.expect_value(t, snapshot_match(snap, c.p).order, c.want)

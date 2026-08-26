@@ -7,7 +7,7 @@
 // # The single-writer / N-reader model, precisely
 //
 // There is exactly one writer (log.md par. 10). It publishes an
-// Index_Set: the six permutations, the term index, the origin bitset,
+// Index_Set: the seven permutations, the term index, the origin bitset,
 // the high-water marks — and, because this is a language without a
 // collector, its own copies of every list a reader would otherwise
 // have to read from the Store while the writer grows it: the fact
@@ -78,7 +78,7 @@ Snapshot_Error :: enum {
 // n_facts and n_terms, and reads them through its own copies of the
 // chunk lists, taken at publication (package comment).
 Index_Set :: struct {
-	ord:     [Order][]Fact_ID, // the six sorted FactID permutations
+	ord:     [Order][]Fact_ID, // the seven sorted FactID permutations
 	terms:   []Term_ID, // the term index: dictionary ids sorted by encoding (termindex.odin)
 	derived: []u64, // the origin bitset at publication
 	facts:   [][]Fact, // the fact chunk list at publication

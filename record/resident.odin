@@ -191,7 +191,7 @@ Store :: struct {
 	epochs:    [dynamic][]Epoch_Meta, // EPOCH_CHUNK_SIZE-entry chunks, indexed by epoch-1
 	n_epochs:  u32, // committed epochs; equals the last epoch, since epochs are contiguous from 1
 	notes:     [dynamic]Env_Note, // in log order; last_epoch is non-decreasing
-	ord:       [Order][]Fact_ID, // the six sorted Fact_ID permutations (permute.odin); moved into an Index_Set on publish
+	ord:       [Order][]Fact_ID, // the seven sorted Fact_ID permutations (permute.odin); moved into an Index_Set on publish
 	terms:     []Term_ID, // the term index — dictionary ids sorted by encoding (termindex.odin); moved into an Index_Set on publish
 	idx:       ^Index_Set, // the published index set (snapshot.odin); nil until the first publish; swapped under mu
 	published: Epoch, // the published epoch (log.md par. 7.1 step 5); stored after idx, under mu

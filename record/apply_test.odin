@@ -75,7 +75,7 @@ at_exists :: proc(s: ^Store, epoch: Epoch, q: Op) -> bool {
 
 // same_projection compares two stores structure by structure — fact
 // table, dictionary, epoch table, and the published set's term index
-// and six permutations — the comparison both the rollback and the
+// and seven permutations — the comparison both the rollback and the
 // replay-equivalence tests rest on. `walls` compares the epochs' wall
 // clocks too: right when both stores read one log, meaningless when
 // each took its own clock.
@@ -1061,7 +1061,7 @@ test_rdf12_untouched_list :: proc(t: ^testing.T) {
 	testing.expect_value(t, size_of(Fact), 24)
 	testing.expect_value(t, s.n_facts, u32(3))
 
-	// The six permutations still sort Term_IDs, and a triple term's id
+	// The seven permutations still sort Term_IDs, and a triple term's id
 	// orders among them like any other — no order knows what it holds.
 	tt_id, _ := snapshot_resolve(snap, &tt)
 	for o in Order {

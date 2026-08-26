@@ -1,12 +1,15 @@
-// The six permutations (RECORD-T-0008): sorted []FactID views of the
-// fact table, one per order of (S, P, O) with G as the residual
-// tiebreaker — RECORD-A-0004's decision, enforced here by the type
-// surface: Order has exactly these six members and order_key places G
-// at depth 3 in every one of them, so nothing graph-first can be
-// requested, only wished for.
+// The seven permutations (RECORD-T-0008, RECORD-T-0028): sorted
+// []FactID views of the fact table — one per order of (S, P, O) with G
+// as the residual tiebreaker (RECORD-A-0004), plus GPOS, the one
+// graph-first order, built when the application's workspace design
+// fired that ADR's review trigger. The type surface enforces the
+// shape: Order has exactly these seven members; order_key places G at
+// depth 3 in six of them and at depth 0 in one, so "everything in this
+// graph" and "instances of a class in this graph" are prefix windows,
+// and nothing else graph-first can be requested, only wished for.
 //
 // Built once, at the end of replay, by sorting — never by incremental
-// insertion (log.md par. 8's cost argument: six sorts are tens of
+// insertion (log.md par. 8's cost argument: seven sorts are tens of
 // milliseconds against an O(n) memmove per insert). Every fact
 // generation is indexed, retracted ones included: visibility at an
 // epoch is the reader's filter, never the index's shape, which is what
@@ -18,9 +21,10 @@ package record
 
 import "core:slice"
 
-// Order names the six permutations: architecture.md par. 4.1's triple
-// orders with G appended (RECORD-A-0004). The names read as the sort
-// key, most-significant first.
+// Order names the seven permutations: architecture.md par. 4.1's six
+// triple orders with G appended (RECORD-A-0004), and GPOS, G leading
+// (RECORD-T-0028). The names read as the sort key, most-significant
+// first.
 Order :: enum u8 {
 	SPOG,
 	SOPG,
@@ -28,6 +32,7 @@ Order :: enum u8 {
 	POSG,
 	OSPG,
 	OPSG,
+	GPOS, // the graph-first order: (G), (G,P) and (G,P,O) as prefixes
 }
 
 // Component names one position of a fact, for key tables and the
@@ -39,8 +44,9 @@ Component :: enum u8 {
 	G,
 }
 
-// order_key is an order's sort key as component depths, G always last
-// — the one rule RECORD-A-0004 sets for every order.
+// order_key is an order's sort key as component depths: G last in the
+// six triple orders — RECORD-A-0004's rule — and first in GPOS, the
+// one exception RECORD-T-0028 spent the ADR's escape hatch on.
 order_key :: proc(o: Order) -> [4]Component {
 	switch o {
 	case .SPOG:
@@ -55,6 +61,8 @@ order_key :: proc(o: Order) -> [4]Component {
 		return {.O, .S, .P, .G}
 	case .OPSG:
 		return {.O, .P, .S, .G}
+	case .GPOS:
+		return {.G, .P, .O, .S}
 	}
 	unreachable()
 }
@@ -77,10 +85,10 @@ fact_component :: proc(f: ^Fact, c: Component) -> Term_ID {
 // Perm_Rec is the transient sort record: one order's key materialized
 // beside the FactID, 20 bytes, no padding. Sorting FactIDs in place
 // and comparing through the fact table costs two random gathers per
-// probe — measured at 756 ms for the six orders at ISMS scale, most
+// probe — measured at 756 ms for the original six orders at ISMS scale, most
 // of the boot budget — where sorting these contiguous records is an
 // order of magnitude cheaper. Scaffolding in log.md par. 8's sense:
-// one buffer, reused across the six sorts, freed before returning.
+// one buffer, reused across the seven sorts, freed before returning.
 // The resident form stays []FactID and nothing else (RECORD-A-0004,
 // api.md par. 5).
 // radix_pass is one stable counting pass over the 16-bit digit of each
@@ -117,7 +125,7 @@ radix_pass :: proc(src, dst: []Fact_ID, col: []u32, counts: []u32, shift: uint) 
 	return true
 }
 
-// store_build_permutations sorts all six orders over the current fact
+// store_build_permutations sorts all seven orders over the current fact
 // table — log.md par. 8's buildPermutations, the end of replay. It is
 // also the eventual delta-merge rebuild (api.md par. 5.2): one code
 // path, exercised on every load. Rebuilding replaces each order

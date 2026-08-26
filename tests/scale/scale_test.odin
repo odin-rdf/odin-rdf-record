@@ -416,7 +416,7 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	testing.expect_value(t, m.n, s.n_facts)
 	testing.expect_value(t, len(m.live), live)
 
-	// The six permutations over the full table (RECORD-T-0008):
+	// Every permutation over the full table (RECORD-T-0008; seven since RECORD-T-0028):
 	// sortedness asserted at scale through the public key surface, and
 	// the build timed informally — the formal boot measurement is
 	// RECORD-T-0012's.
@@ -446,7 +446,7 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 			}
 		}
 	}
-	log.infof("permutations: 6 orders over %d facts sorted in %.0f ms", s.n_facts, sort_ms)
+	log.infof("permutations: %d orders over %d facts sorted in %.0f ms", len(rec.Order), s.n_facts, sort_ms)
 
 	// The read API at scale (RECORD-T-0010): publish, then sampled
 	// patterns — components lifted from real facts across the table —

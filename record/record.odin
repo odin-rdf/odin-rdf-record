@@ -27,7 +27,7 @@
 // to (RECORD-T-0004); resident.odin is the resident layout — the fact
 // table, the dictionary arena, the epoch table — and load.odin the
 // Loader that fills it from the replay seam (RECORD-T-0007);
-// permute.odin is the six sorted permutations, radix-built after
+// permute.odin is the seven sorted permutations, radix-built after
 // replay (RECORD-T-0008); snapshot.odin is publication and the
 // refcounted read handle — Index_Set, Latest/At, the epoch discipline
 // (RECORD-T-0009), with the acquire mutex and the set's list copies

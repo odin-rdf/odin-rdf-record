@@ -44,6 +44,7 @@ test_permutations_exact :: proc(t: ^testing.T) {
 		.POSG = {2, 3, 4, 5, 0, 1, 6},
 		.OSPG = {2, 6, 3, 4, 5, 1, 0},
 		.OPSG = {2, 6, 3, 4, 5, 0, 1},
+		.GPOS = {3, 0, 6, 2, 4, 5, 1}, // g=0: f3 f0 (p10, s1<s2) f6 (p12); g=1: f2 (o5) f4 f5 (o7, FactID) f1 (p11)
 	}
 	for o in Order {
 		w := want[o]

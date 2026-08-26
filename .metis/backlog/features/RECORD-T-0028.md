@@ -4,15 +4,15 @@ level: task
 title: "A graph-first order, GPOS: 'which Risks are in this workspace' as a prefix, not a scan"
 short_code: "RECORD-T-0028"
 created_at: 2026-08-26T21:10:55.899140+00:00
-updated_at: 2026-08-26T21:10:55.899140+00:00
+updated_at: 2026-08-26T22:39:45.929941+00:00
 parent: 
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/backlog"
   - "#feature"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
@@ -173,36 +173,38 @@ already lets the caller make.
   graph is a small fraction of the store"* — describes a workspace by
   construction.
 
-## Acceptance Criteria **[REQUIRED]**
+## Acceptance Criteria
 
-- [ ] `Order.GPOS` with key `{.G, .P, .O, .S}`, built by
+**[REQUIRED]**
+
+- [x] `Order.GPOS` with key `{.G, .P, .O, .S}`, built by
       `store_build_permutations`, present in every `Index_Set`, and
       every `for o in Order` site handling it (the compiler enforces
       this).
-- [ ] `choose_order` selects `GPOS` for `{G}`, `{G,P}`, `{G,P,O}` and is
+- [x] `choose_order` selects `GPOS` for `{G}`, `{G,P}`, `{G,P,O}` and is
       **unchanged** for every pattern with `S` bound, with `{G,O}`, and
       with `G` unbound — pinned by a test over the full bound-set table.
-- [ ] A test with two named graphs and the default graph: for
+- [x] A test with two named graphs and the default graph: for
       `Pattern{g = W, p = rdf:type, o = risk:Risk}`,
       `range_len(snapshot_match(...)) == |matching facts in W|` — over-scan
       1×, where today it equals the store-wide count.
-- [ ] `MATCH_DEFAULT_GRAPH` works as a `GPOS` prefix (stored `0`), and
+- [x] `MATCH_DEFAULT_GRAPH` works as a `GPOS` prefix (stored `0`), and
       `Pattern.g` bound plus `Filter.graphs` still intersect in
       `scan_next`.
-- [ ] A `snapshot_match_as(.GPOS)` window for a `(G,P,O)` pattern ascends
+- [x] A `snapshot_match_as(.GPOS)` window for a `(G,P,O)` pattern ascends
       in S — a test, since odin-rdf-sparql's merge join will rely on it.
-- [ ] Measured and recorded in Status: rebuild time, resident size, and
+- [x] Measured and recorded in Status: rebuild time, resident size, and
       one-commit time at 4×10⁵ facts, before and after; the vision's
       Current State and the README's numbers re-read and amended where
       the seventh order moves them.
-- [ ] `RECORD-A-0004` **amended, not rewritten**: a dated note under the
+- [x] `RECORD-A-0004` **amended, not rewritten**: a dated note under the
       decision recording that the posting-list escape hatch was spent as
       one graph-first order for the `(G, P, O)` shape, on this consumer's
       request; the "no graph-first permutations" sentence stands as the
       record with the note beside it. `api.md` §5.1 and §12.2's order
       table amended the same way; the "six" in `permute.odin`'s,
       `resident.odin`'s and `snapshot.odin`'s comments corrected.
-- [ ] `make test` and `make check` green; both verifiers agree over the
+- [x] `make test` and `make check` green; both verifiers agree over the
       fault corpus (they should be untouched — the format did not move).
 
 ## Implementation Notes
@@ -238,3 +240,68 @@ already lets the caller make.
   the sibling changes, are in this task and its two siblings
   (`SPARQL-T-0044`, `SHACL-T-0039`). Not started; the owner's call on
   when.
+- **2026-08-27 — Active. Plan**, before code. `permute.odin`: `Order.GPOS`,
+  key `{.G, .P, .O, .S}`; the radix build already iterates `Order` and
+  `order_key`, so it needs nothing. `read.odin`: `choose_order` gains
+  the one G-led case (bound G, S unbound, O not bound without P) placed
+  *after* the S cases and *before* the P/O ones; `pattern_component`
+  returns the pattern's G as spelled so the prefix loop's "0 is unbound"
+  test still holds, and `snapshot_match_as` maps `MATCH_DEFAULT_GRAPH`
+  to the stored `0` as it enters `want`; the prefix widens from 3 to 4,
+  since a named `GPOS` can now carry every component. `permute_test`'s
+  exact corpus gets its hand-computed `GPOS` row; the order-selection
+  test gets the G-led rows; a new `test_read_graph_prefix` builds a
+  two-workspace corpus through the writer and replay and asserts the
+  1× windows, the S-ascending walk, the default graph as a prefix, the
+  unchanged S-bound and (G,O) choices, `snapshot_match_as(.POSG)`
+  agreeing on the answer with a 3× window, and `Pattern.g ∩
+  Filter.graphs`. Comments that state "six" as a fact about the type
+  surface are corrected; `api.md` §5, §5.1 and §12.2 and `RECORD-A-0004`
+  get dated notes, old text standing. Then `make test` for the scale
+  numbers against yesterday's run (sort 45 ms, permutations 9.2 MB of
+  21.2, commit 34.5/35.9/42.1 ms, boot 221/301 ms).
+- **2026-08-27 — Done; unreleased on `main`.** Built as planned, with
+  one refinement the plan named and the code needed: the prefix widens
+  from three components to four, because a planner naming `GPOS` for a
+  fully bound pattern now has a four-deep prefix. `make check` clean;
+  80 record tests (79 + `test_read_graph_prefix`), `make test` green
+  end to end, both verifiers untouched — the format did not move.
+
+  **Measured, same machine, against yesterday's run** (`tests/scale`,
+  ISMS-shaped corpus, 4×10⁵ ops):
+
+  | | six orders (2026-08-26) | seven (2026-08-27) | delta |
+  | --- | --- | --- | --- |
+  | permutation sort, 340,145 facts | 45 ms | 57 ms | +12 ms |
+  | boot phase "permutation sort" | 44 / 43 ms | 51 / 52 ms | +8 ms |
+  | boot, bulk-loaded / hand-edited | 221 / 301 ms | 237 / 309 ms | +16 / +8 ms |
+  | resident after bulk apply, 4×10⁵ facts | 21.2 MB (perms 9.2) | 22.7 MB (perms 10.7) | +1.5 MB = 4 B × facts |
+  | resident at boot, 340,145 facts | 20.0 MB (perms 7.8) | 21.3 MB (perms 9.1) | +1.3 MB |
+  | one commit at 4×10⁵ facts, min / mean / max | 34.5 / 35.9 / 42.1 ms | 37.6 / 41.1 / 48.0 ms | +3 / +5 / +6 ms |
+  | verify / replay (log-level, unaffected) | 53 / 57 · 88 / 100 ms | 58 / 62 · 97 / 101 ms | noise |
+
+  Every delta is the one the task priced: one more 4-byte-per-fact
+  array, one more radix pass set on boot and wake, one more flat
+  copy-on-write per commit until `RECORD-A-0005`'s delta structure
+  lands. The G column is small dictionary ids, so its high-16-bit pass
+  is skipped, which is why the seventh sort costs less than a sixth of
+  the six.
+
+  **What the consumer's shape costs now**, from `test_read_graph_prefix`
+  (two workspaces of 4 and 3 facts, one default-graph fact): `{g = W,
+  p = rdf:type, o = Risk}` opens a window of exactly 2 where `(P, O)`
+  alone opens 6; `{g = W}` is 4; `{g = W, p}` is 3; the default graph
+  as `MATCH_DEFAULT_GRAPH` is a prefix of 1; `{g = W, o}` stays `OSPG`
+  with a 6-wide window filtered residually; `{s, g}` stays `SPOG`; and a
+  planner naming `POSG` for the same pattern gets the same answer from
+  the 3× window. `RECORD-T-0026`'s `GRAPH <g> { ?s ?p ?o }` is the
+  `(G)` row of the same table and is a prefix now too.
+
+  **Not done here, deliberately**: a tag. The seventh order is on
+  `main` and unreleased; whether it is `v0.6.0` alone or waits for
+  `SPARQL-T-0044` / `SHACL-T-0039` is the owner's call. Both engines
+  call `snapshot_match`, so once either pins a release that includes
+  this, their graph-bound patterns are prefix reads with no source
+  change — odin-rdf-sparql's `graph` benchmark case
+  (`RECORD-T-0026`'s 169,055 candidates for 4,122 answers) becomes
+  4,122 for 4,122.

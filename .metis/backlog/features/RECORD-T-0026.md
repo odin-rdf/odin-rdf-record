@@ -121,3 +121,15 @@ transfer. Recorded as one note with the above because it is one cause.
   `SPARQL-T-0040` and `SPARQL-T-0036`, and `SPARQL-I-0003` §12 carries
   the joined table. Neither half alone was evidence, which is why the
   benchmark was built before the port rather than after.
+- **2026-08-27 — Answered on `main`, unreleased (`RECORD-T-0028`).** The
+  application's workspace design fired `RECORD-A-0004`'s review trigger
+  on a `(G, P, O)` shape, and the escape hatch was spent as one
+  graph-first order, `GPOS`. This note's shape — `GRAPH <g> { ?s ?p
+  ?o }`, G alone — is that order's `(G)` row: a prefix window that is
+  exactly the graph, where it was the whole permutation filtered. Its
+  second half (`GRAPH ?g` over the named graphs) is not built, but the
+  default graph is stored as `G = 0` and so sorts first in `GPOS`; the
+  named graphs are that order's tail, which is the cheap answer if a
+  consumer asks. Nothing in odin-rdf-sparql changes: it calls
+  `snapshot_match`, and the 169,055 candidates become 4,122 at whatever
+  pin includes this. Still evidence; now evidence with an answer.

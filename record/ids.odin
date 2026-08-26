@@ -23,7 +23,7 @@ package record
 Term_ID :: distinct u32
 
 // Fact_ID is a fact generation's position in the fact table, 0-based —
-// what scan_next yields and snapshot_fact takes; what the six
+// what scan_next yields and snapshot_fact takes; what the seven
 // permutations hold. It is an index, and the chunked table is where the
 // shift-and-mask on it happens.
 Fact_ID :: distinct u32

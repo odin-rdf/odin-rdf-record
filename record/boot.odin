@@ -27,7 +27,7 @@ package record
 ENV_NOTE_V1 :: `{"format":1,"derived":"none"}`
 
 // store_open boots a store from its directory: log.md par. 7.2's
-// recovery, par. 8's replay as the only load path, the six sorts, one
+// recovery, par. 8's replay as the only load path, the seven sorts, one
 // publication, and the writer resumed to continue the chain. A fresh
 // directory (or one whose only segment never durably opened) is
 // created rather than resumed. On success the caller owns the store
