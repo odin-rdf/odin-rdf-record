@@ -70,7 +70,7 @@ at_exists :: proc(s: ^Store, epoch: Epoch, q: Op) -> bool {
 			return false
 		}
 	}
-	return snapshot_exists(snap, p, {origin = .Any})
+	return snapshot_exists(snap, p, {origin = .Any, scope = .All})
 }
 
 // same_projection compares two stores structure by structure — fact
@@ -494,7 +494,7 @@ equivalence :: proc(t: ^testing.T, ops: File_Ops, seed: u64) {
 	// The head's live set is the script's.
 	snap, _ := store_latest(&s)
 	n := 0
-	sc := range_iter(snapshot_match(snap, {}), {origin = .Any})
+	sc := range_iter(snapshot_match(snap, {}), {origin = .Any, scope = .All})
 	for _ in scan_next(&sc) {
 		n += 1
 	}
@@ -682,7 +682,7 @@ probe_exists :: proc(snap: Snapshot, q: Op) -> bool {
 		return false
 	}
 	p.g = MATCH_DEFAULT_GRAPH
-	return snapshot_exists(snap, p, {origin = .Any})
+	return snapshot_exists(snap, p, {origin = .Any, scope = .All})
 }
 
 @(private = "file")
@@ -995,9 +995,9 @@ test_read_rdf12_terms :: proc(t: ^testing.T) {
 	// A pattern binding a triple term's id matches the facts carrying
 	// it — layer 1 binds ids and a triple term is an id, which is the
 	// claim RECORD-I-0004's non-goals make.
-	testing.expect(t, snapshot_exists(snap, {o = outer_id}, {origin = .Any}), "a pattern binds a triple term")
+	testing.expect(t, snapshot_exists(snap, {o = outer_id}, {origin = .Any, scope = .All}), "a pattern binds a triple term")
 	n := 0
-	sc := range_iter(snapshot_match(snap, {o = inner_id}), {origin = .Any})
+	sc := range_iter(snapshot_match(snap, {o = inner_id}), {origin = .Any, scope = .All})
 	for _ in scan_next(&sc) {
 		n += 1
 	}
@@ -1071,8 +1071,8 @@ test_rdf12_untouched_list :: proc(t: ^testing.T) {
 	// Filter, visibility and the epoch table: origin must still be
 	// stated, a retract still ends visibility at the retracting epoch,
 	// and the epoch table still carries actor and reason.
-	testing.expect(t, snapshot_exists(snap, {o = tt_id}, {origin = .Any}), "the triple term's fact is live")
-	testing.expect(t, !snapshot_exists(snap, {o = tt_id}, {origin = .Derived}), "and it is not derived")
+	testing.expect(t, snapshot_exists(snap, {o = tt_id}, {origin = .Any, scope = .All}), "the triple term's fact is live")
+	testing.expect(t, !snapshot_exists(snap, {o = tt_id}, {origin = .Derived, scope = .All}), "and it is not derived")
 	meta := snapshot_epoch_meta(snap, Epoch(1))
 	testing.expect(t, meta.wall > 0, "the epoch table still carries a wall clock")
 

@@ -46,15 +46,30 @@ Origin :: enum u8 {
 	Any      = 3, // both
 }
 
+// Graph_Scope says what a Filter's graph set means, and has no default
+// deliberately, for the reason Origin has none: "every graph" and
+// "only these" answer different questions, and a zero value picking
+// one silently is how an empty set came to read the whole store —
+// Odin nils some empty slices and not others, so a nil test was
+// letting allocation history choose (RECORD-T-0029). The zero value
+// is invalid and range_iter refuses it.
+Graph_Scope :: enum u8 {
+	All = 1, // every graph; `graphs` must be empty
+	Set = 2, // only the graphs listed — an empty list admits nothing
+}
+
 // Filter is everything the prefix could not express, evaluated per
-// candidate by the scan. `graphs` scopes to a set of graphs (api.md
-// par. 12.8's FROM/FROM NAMED shape): nil means every graph, otherwise
-// a small slice scanned linearly, holding stored G components — 0 or
-// MATCH_DEFAULT_GRAPH for the default graph, both accepted. It is
-// distinct from Pattern.g, which is what GRAPH ?g binds.
+// candidate by the scan. `scope` and `graphs` together scope to a set
+// of graphs (api.md par. 12.8's FROM/FROM NAMED shape): under .Set,
+// `graphs` is a small slice scanned linearly, holding stored G
+// components — 0 or MATCH_DEFAULT_GRAPH for the default graph, both
+// accepted — and its length alone decides what it admits; no pointer
+// is consulted. It is distinct from Pattern.g, which is what GRAPH ?g
+// binds; the two intersect.
 Filter :: struct {
 	origin: Origin,
-	graphs: []Term_ID,
+	scope:  Graph_Scope,
+	graphs: []Term_ID, // read under .Set only
 }
 
 // Range is what Match returns: a window into one permutation, the
@@ -88,10 +103,11 @@ Scan :: struct {
 	snap:    Snapshot,
 	ids:     []Fact_ID, // the unconsumed window
 	origin:  Origin,
-	graphs:  []Term_ID,
+	graphs:  []Term_ID, // the set to require membership of, when scoped
 	s, p, o: Term_ID, // residual component checks; 0 = not checked
 	g_want:  Term_ID, // the stored G value to require when g_bound
 	g_bound: bool,
+	scoped:  bool, // Filter.scope == .Set: decided by length, never by pointer
 }
 
 // snapshot_match answers a pattern as one prefix range, choosing the
@@ -131,20 +147,26 @@ snapshot_match_as :: proc(snap: Snapshot, p: Pattern, order: Order) -> Range {
 	return Range{snap = snap, order = order, main = ids[lo:hi], residual = p}
 }
 
-// range_iter binds the filter set and returns the scan. Origin must be
-// stated — Origin(0) is refused here, per api.md par. 12.5. The
-// residual checks are the full pattern: prefix components pass
-// trivially (they are equal by construction), and re-checking them
-// costs register compares against tracking which were covered.
+// range_iter binds the filter set and returns the scan. Origin and
+// graph scope must be stated — the zero value of either is refused
+// here, per api.md par. 12.5 and RECORD-T-0029 — and a scope of .All
+// carrying a set is refused as a contradiction rather than resolved
+// either way. The residual checks are the full pattern: prefix
+// components pass trivially (they are equal by construction), and
+// re-checking them costs register compares against tracking which were
+// covered.
 range_iter :: proc(r: Range, f: Filter) -> Scan {
 	assert(r.snap.idx != nil, "range_iter: a released snapshot")
 	assert(f.origin >= .Asserted && f.origin <= .Any, "range_iter: origin must be stated (api.md par. 12.5)")
+	assert(f.scope == .All || f.scope == .Set, "range_iter: graph scope must be stated (RECORD-T-0029)")
+	assert(f.scope == .Set || len(f.graphs) == 0, "range_iter: scope .All with a graph set — say .Set")
 	assert(len(r.delta) == 0, "range_iter: the delta run arrives with Apply")
 	sc := Scan{
 		snap   = r.snap,
 		ids    = r.main,
 		origin = f.origin,
 		graphs = f.graphs,
+		scoped = f.scope == .Set,
 		s      = r.residual.s,
 		p      = r.residual.p,
 		o      = r.residual.o,
@@ -185,7 +207,7 @@ scan_next :: proc(sc: ^Scan) -> (id: Fact_ID, ok: bool) {
 		if sc.origin != .Any && snapshot_derived(sc.snap, id) != (sc.origin == .Derived) {
 			continue
 		}
-		if sc.graphs != nil {
+		if sc.scoped {
 			for g in sc.graphs {
 				if f.g == g || (f.g == 0 && g == MATCH_DEFAULT_GRAPH) {
 					return id, true

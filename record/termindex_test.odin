@@ -191,7 +191,7 @@ torture_check :: proc(tt: ^Torture, snap: Snapshot) {
 	// Match: the live count at E is min(E, 2), scanned through the
 	// permutation the writer keeps rebuilding under us.
 	n := 0
-	sc := range_iter(snapshot_match(snap, {p = 1}), {origin = .Any})
+	sc := range_iter(snapshot_match(snap, {p = 1}), {origin = .Any, scope = .All})
 	for id in scan_next(&sc) {
 		f := snapshot_fact(snap, id)
 		// The schedule numbers terms, facts and epochs in lockstep, so the
@@ -204,12 +204,12 @@ torture_check :: proc(tt: ^Torture, snap: Snapshot) {
 
 	// Exists, at the edges of the live window.
 	if E >= 1 {
-		torture_fault(tt, snapshot_exists(snap, {s = Term_ID(E) + 1}, {origin = .Any}))
+		torture_fault(tt, snapshot_exists(snap, {s = Term_ID(E) + 1}, {origin = .Any, scope = .All}))
 	}
 	if E >= 3 {
-		torture_fault(tt, !snapshot_exists(snap, {s = Term_ID(E) - 1}, {origin = .Any}))
+		torture_fault(tt, !snapshot_exists(snap, {s = Term_ID(E) - 1}, {origin = .Any, scope = .All}))
 	}
-	torture_fault(tt, !snapshot_exists(snap, {s = Term_ID(E) + 2}, {origin = .Any}))
+	torture_fault(tt, !snapshot_exists(snap, {s = Term_ID(E) + 2}, {origin = .Any, scope = .All}))
 	// The epoch table through the set: every published epoch's meta.
 	if E >= 1 {
 		torture_fault(tt, snapshot_epoch_meta(snap, E).wall == u64(E))

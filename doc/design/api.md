@@ -950,7 +950,8 @@ default graph's sentinel was 1; the log.md §5.3 amendment moved that sentinel t
 invalid in term space (inline flag set, tag zero), so it can never name a term.
 S, P, and O need no such spelling: no fact carries 0 there. A graph *set*
 (`Filter.Graphs`) holds stored G components, where 0 unambiguously is the
-default graph; `MATCH_DEFAULT_GRAPH` is accepted there too.*
+default graph; `MATCH_DEFAULT_GRAPH` is accepted there too. Since 2026-08-26
+the set is read only under `Filter.Scope == Set` (RECORD-T-0029, §12.5).*
 
 **Order selection.** The six orders are `architecture.md` §4.1's, with `G`
 appended as the final tiebreaker (§5.1). Every triple pattern is prefix-covered:
@@ -1019,6 +1020,12 @@ func (sc *Scan) Next() bool
 func (sc *Scan) ID() FactID
 func (sc *Scan) Fact() *Fact
 ```
+
+*Amended 2026-08-26 (RECORD-T-0029): `Filter` carries a third field, `Scope`,
+with no valid zero — `All` or `Set` — and `Graphs` is read under `Set` only.
+"nil means every graph" tested a pointer, and Odin nils some empty slices and
+not others, so an empty set read every graph or nothing by allocation history.
+The rule is now the one §12.5 states for `Origin`; the note there says why.*
 
 `Scan` 2-way merges main and delta in the range's order, and per candidate
 evaluates visibility (`f.Assert <= e && e < f.Retract`, with `Retract` read
@@ -1125,6 +1132,20 @@ both correct answers to different questions, and `architecture.md` A.5 is emphat
 that an auditor must never see an inference presented as a record. A silent
 default is exactly how that failure would happen, so `Origin(0)` is invalid and
 the call will not compile into something meaningful without a choice.
+
+*Amended 2026-08-26 (RECORD-T-0029): **the same rule now governs graph scope.**
+`Filter.Scope` has no default — `All` or `Set`, the zero value refused by `Iter`
+as `Origin(0)` is — because "every graph" and "only these" are different
+questions too, and the field beside this one was answering it by a pointer test:
+`Graphs == nil` meant every graph, and Odin nils some empty slices and not others
+(a zero-value dynamic array's slice is nil; one made with a capacity hint, one
+appended to and then cleared, and a stack buffer's `[:0]` are not). So the same
+empty set — a workspace with no descendants, a reader permitted nothing — read
+the whole store or nothing by allocation history, and for an authorization
+ceiling the open direction was the one taken by the plainest code. Found the day
+the first consumer designed a computed set (the workspace design of 2026-08-26;
+nothing had passed one before). Under `Set` the length alone decides, and an
+empty set admits nothing; `All` carrying a set is refused as a contradiction.*
 
 ### 12.6 The history of an entity
 
@@ -1312,7 +1333,10 @@ Named now rather than discovered later:
   whole dataset, otherwise a small sorted `[]ID` scanned linearly. This is
   separate from `Pattern.G`, which is what `GRAPH ?g { ... }` binds. Note that
   `architecture.md` §9 flags "default graph or union of all graphs" as a decision
-  that must be made explicitly; it still has not been.
+  that must be made explicitly; it still has not been. *(Amended 2026-08-26,
+  RECORD-T-0029: `nil` for the whole dataset is no longer the spelling —
+  `Scope = All` is; `Graphs` is read under `Scope = Set` only, and an empty set
+  admits nothing. §12.5 carries the reason.)*
 - **Bindings should not be `map[Var]ID`.** §7.2 sketches that, and a map
   allocation per row will dominate every other cost in this document. Assign
   variable slots at plan time and make a row a `[]ID`, slab-allocated per query.

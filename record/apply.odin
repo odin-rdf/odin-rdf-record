@@ -360,7 +360,7 @@ liveness :: proc(head: Snapshot, effects: ^map[Quad]Effect, q: Quad) -> (live: b
 		return e.live, false, 0, e.pending
 	}
 	g := q.g if q.g != 0 else MATCH_DEFAULT_GRAPH
-	sc := range_iter(snapshot_match(head, {s = q.s, p = q.p, o = q.o, g = g}), {origin = .Any})
+	sc := range_iter(snapshot_match(head, {s = q.s, p = q.p, o = q.o, g = g}), {origin = .Any, scope = .All})
 	fid, hit := scan_next(&sc)
 	return hit, true, fid, 0
 }

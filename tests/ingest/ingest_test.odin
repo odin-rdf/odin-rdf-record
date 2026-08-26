@@ -35,7 +35,7 @@ live_count :: proc(s: ^rec.Store, epoch: rec.Epoch) -> (n: int) {
 		return -1
 	}
 	defer rec.snapshot_release(&snap)
-	sc := rec.range_iter(rec.snapshot_match(snap, {}), {origin = .Any})
+	sc := rec.range_iter(rec.snapshot_match(snap, {}), {origin = .Any, scope = .All})
 	for _ in rec.scan_next(&sc) {
 		n += 1
 	}
@@ -71,7 +71,7 @@ exists :: proc(s: ^rec.Store, epoch: rec.Epoch, q: rdf.Quad) -> bool {
 			return false
 		}
 	}
-	return rec.snapshot_exists(snap, p, {origin = .Any})
+	return rec.snapshot_exists(snap, p, {origin = .Any, scope = .All})
 }
 
 // term_has_blank recurses into a triple term (RECORD-T-0024). RDF 1.2's
@@ -620,7 +620,7 @@ test_ingest_triple_term_commits :: proc(t: ^testing.T) {
 	defer rec.snapshot_release(&snap)
 	id, found := rec.snapshot_resolve(snap, ops[at].object)
 	testing.expect(t, found && id != 0, "the triple term resolves to an id")
-	testing.expect(t, rec.snapshot_exists(snap, {o = id}, {origin = .Any}), "a pattern binding it matches")
+	testing.expect(t, rec.snapshot_exists(snap, {o = id}, {origin = .Any, scope = .All}), "a pattern binding it matches")
 
 	// And its blank-node components carry the document's scope, which is
 	// what makes two documents loadable side by side (RECORD-T-0023).

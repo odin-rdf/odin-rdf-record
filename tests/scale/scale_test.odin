@@ -480,7 +480,7 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 					want += 1
 				}
 				got := 0
-				sc := rec.range_iter(rec.snapshot_match(snap, p), {origin = .Any})
+				sc := rec.range_iter(rec.snapshot_match(snap, p), {origin = .Any, scope = .All})
 				for _ in rec.scan_next(&sc) {
 					got += 1
 				}
@@ -539,7 +539,7 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	snap, serr := rec.store_latest(&s)
 	testing.expect_value(t, serr, rec.Snapshot_Error.None)
 	n_live := 0
-	sc := rec.range_iter(rec.snapshot_match(snap, {}), {origin = .Any})
+	sc := rec.range_iter(rec.snapshot_match(snap, {}), {origin = .Any, scope = .All})
 	for _ in rec.scan_next(&sc) {
 		n_live += 1
 	}

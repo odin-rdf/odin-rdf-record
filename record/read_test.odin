@@ -121,7 +121,7 @@ oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter) -> (out: [dynamic]
 		if f.origin != .Any && store_derived(snap.store, id) != (f.origin == .Derived) {
 			continue
 		}
-		if f.graphs != nil {
+		if f.scope == .Set {
 			hit := false
 			for g in f.graphs {
 				if fact.g == g || (fact.g == 0 && g == MATCH_DEFAULT_GRAPH) {
@@ -179,7 +179,11 @@ test_read_oracle :: proc(t: ^testing.T) {
 	g4 := [1]Term_ID{4}
 	gd := [1]Term_ID{MATCH_DEFAULT_GRAPH}
 	both := [2]Term_ID{MATCH_DEFAULT_GRAPH, 4}
-	graph_sets := [4][]Term_ID{nil, gd[:], g4[:], both[:]}
+	Scoping :: struct {
+		scope:  Graph_Scope,
+		graphs: []Term_ID,
+	}
+	graph_sets := [4]Scoping{{.All, nil}, {.Set, gd[:]}, {.Set, g4[:]}, {.Set, both[:]}}
 
 	checked := 0
 	for epoch in Epoch(0) ..= 4 {
@@ -189,7 +193,7 @@ test_read_oracle :: proc(t: ^testing.T) {
 			r := snapshot_match(snap, p)
 			for origin in origins {
 				for graphs in graph_sets {
-					f := Filter{origin = origin, graphs = graphs}
+					f := Filter{origin = origin, scope = graphs.scope, graphs = graphs.graphs}
 					want := oracle_collect(snap, p, f)
 					got := scan_collect(r, f)
 					testing.expectf(
@@ -217,11 +221,78 @@ test_read_oracle :: proc(t: ^testing.T) {
 	// One case pinned by hand so the oracle itself is answerable:
 	// epoch 4, any origin, no graph filter — f2, f3, f4, f5 live.
 	snap, _ := store_latest(&s)
-	got := scan_collect(snapshot_match(snap, {}), {origin = .Any})
+	got := scan_collect(snapshot_match(snap, {}), {origin = .Any, scope = .All})
 	want := [4]Fact_ID{2, 3, 4, 5}
 	testing.expect(t, slice.equal(got[:], want[:]), "the head's live set, by hand")
 	delete(got)
 	snapshot_release(&snap)
+}
+
+// RECORD-T-0029: an empty graph set admits nothing, however it was
+// built. Odin nils some empty slices and not others — a zero-value
+// dynamic array's slice is nil; one made with a capacity hint, one
+// appended to and cleared, and a stack buffer's [:0] are not — and the
+// scan used to test the pointer, so the same empty set read every
+// graph or nothing by allocation history. The test asserts that the
+// four differ in nil-ness on purpose: that is what proves both former
+// branches are covered, and it will say so if a compiler ever unifies
+// them.
+@(test)
+test_read_graph_scope_empty :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	_ = rt_build(t, &fs, &s)
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+
+	zero: [dynamic]Term_ID
+	defer delete(zero)
+	hinted := make([dynamic]Term_ID, 0, 8)
+	defer delete(hinted)
+	cleared: [dynamic]Term_ID
+	defer delete(cleared)
+	append(&cleared, Term_ID(4))
+	clear(&cleared)
+	buf: [4]Term_ID
+
+	Empty :: struct {
+		name: string,
+		set:  []Term_ID,
+	}
+	empties := [4]Empty{
+		{"zero-value dynamic array", zero[:]},
+		{"dynamic array with a capacity hint", hinted[:]},
+		{"dynamic array appended to and cleared", cleared[:]},
+		{"stack buffer [:0]", buf[:0]},
+	}
+
+	saw_nil, saw_ptr := false, false
+	for e in empties {
+		if e.set == nil {
+			saw_nil = true
+		} else {
+			saw_ptr = true
+		}
+		f := Filter{origin = .Any, scope = .Set, graphs = e.set}
+		got := scan_collect(snapshot_match(snap, {}), f)
+		testing.expectf(t, len(got) == 0, "%s: an empty set admitted %v", e.name, got)
+		delete(got)
+		testing.expectf(t, !snapshot_exists(snap, {}, f), "%s: exists under an empty set", e.name)
+	}
+	testing.expect(t, saw_nil && saw_ptr, "the four empty sets no longer differ in nil-ness: this test now covers one branch, not two")
+
+	// The set's length is what admits: the same stack buffer with one
+	// graph in it admits that graph's live facts and nothing else —
+	// f2 and f5 at head, both in graph 4.
+	buf[0] = 4
+	f := Filter{origin = .Any, scope = .Set, graphs = buf[:1]}
+	got := scan_collect(snapshot_match(snap, {}), f)
+	defer delete(got)
+	want := [2]Fact_ID{2, 5}
+	testing.expect(t, slice.equal(got[:], want[:]), "a one-graph set admits exactly its graph")
 }
 
 @(test)
@@ -257,7 +328,7 @@ test_read_order_selection :: proc(t: ^testing.T) {
 
 	// Any order answers any pattern — the residual absorbs what the
 	// prefix could not express — and a graph-bound full scan works.
-	f := Filter{origin = .Any}
+	f := Filter{origin = .Any, scope = .All}
 	for p in ([3]Pattern{{p = 2, o = rt.five}, {s = 3, g = 4}, {g = MATCH_DEFAULT_GRAPH}}) {
 		want := scan_collect(snapshot_match(snap, p), f)
 		for o in Order {
