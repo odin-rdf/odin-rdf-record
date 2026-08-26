@@ -305,3 +305,19 @@ already lets the caller make.
   change — odin-rdf-sparql's `graph` benchmark case
   (`RECORD-T-0026`'s 169,055 candidates for 4,122 answers) becomes
   4,122 for 4,122.
+- **2026-08-27 — Tagged `v0.6.0` at `4bf700c` and walked, the same day.**
+  odin-rdf-sparql (`SPARQL-T-0046`) and odin-rdf-shacl (`SHACL-T-0041`)
+  pinned it with **no source change in either** — both call
+  `snapshot_match`. The consumer-side measurement is sparql's `make
+  bench`, whose `candidates` pins are asserted: **8 moved, all
+  downward, every solution count identical** — `graph` from 20,617 /
+  169,055 to **4,122 / 4,122**, exactly the answer at both sizes, and
+  **0.064 / 0.065 ms** where it was 0.078 / 0.244 — flat across a 10×
+  store as the old store was, and faster than it; `optional`, `order`
+  and `order-limit` each narrower by exactly the named graph's 500
+  facts, because a default-graph pattern's `(G, P, O)` window no longer
+  holds the named graph's facts to filter out. sparql's
+  `merge_order_for` sees the seventh order and selects it when G and P
+  are ground and the join is on O — correct and narrower; the
+  `(G,P,O)`-ground join on S at depth 3 is left for a measured change
+  there.

@@ -133,3 +133,10 @@ transfer. Recorded as one note with the above because it is one cause.
   consumer asks. Nothing in odin-rdf-sparql changes: it calls
   `snapshot_match`, and the 169,055 candidates become 4,122 at whatever
   pin includes this. Still evidence; now evidence with an answer.
+- **2026-08-27, later — pinned and measured.** `v0.6.0`; odin-rdf-sparql's
+  `make bench` (`SPARQL-T-0046`): this case is **4,122 candidates for
+  4,122 answers at both store sizes, 0.064 / 0.065 ms**, where the table
+  above says 20,617 / 169,055 and 0.078 / 0.244 ms — flat across the
+  sizes, which is the property the measurement was built to check, and
+  faster than the graph-first store it was compared against. Every
+  solution count unchanged.

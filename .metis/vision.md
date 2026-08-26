@@ -161,7 +161,10 @@ their side, once that API is real.
 > bound, S is not, and O is not bound without P; +1.6 MB at 4×10⁵ facts,
 > +12 ms on the sort, +5 ms mean per commit; `RECORD-A-0004` amended on its
 > own review trigger, `RECORD-T-0026`'s shape answered. Whether it is
-> `v0.6.0` alone is the owner's call.)*
+> `v0.6.0` alone is the owner's call.)* *(It is: tagged `v0.6.0` at `4bf700c`
+> the same day and walked — no source change in either engine; odin-rdf-sparql's
+> bench measured the `GRAPH <g>` case at 4,122 candidates for 4,122 answers at
+> both store sizes, 0.065 ms flat, where it was 169,055 and 0.244 ms.)*
 
 ## Future State
 
