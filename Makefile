@@ -8,16 +8,26 @@ COLL := -collection:rdf=../odin-rdf-parser
 # Every package with tests. record/ingest is the opt-in subpackage that
 # turns parsed documents into ops (RECORD-I-0003 decision 7); tests/ingest
 # sweeps it over the parser repo's vendored W3C suites, reached through the
-# sibling checkout, and drives the dump round trip, so like tests/tool it
-# needs the built binary. tests/readme compiles the README's example.
-# tests/tool drives the built binary, so the test target depends on tool;
-# tests/proof and tests/ingest run the Python verifier
+# sibling checkout, and drives the dump round trip, so it needs the built
+# binary and the test target depends on tool. tests/readme compiles the
+# README's example. tests/ingest runs the Python verifier
 # (tests/verify/rdflog_verify.py), so the test target requires python3 and
-# says so rather than failing cryptically. tests/scale is separate below: it
-# is the measurement suite, gating the vision's sub-second boot criterion,
-# and runs optimized — a debug harness would measure the harness, not the
-# store.
-PKGS := record record/ingest tests/tool tests/proof tests/ingest tests/readme
+# says so rather than failing cryptically.
+#
+# The proof, tool and scale suites used to live here as separate packages.
+# They are `record/{proof,tool,scale}_test.odin` now, IN the package
+# (RECORD-T-0034): Odin scopes @(private) to the package, so a suite outside
+# it forced 43 internal names to stay exported and put them in every
+# consumer's completion list. tests/ingest and tests/readme cannot follow --
+# they import record/ingest, which imports record, and in-package that is a
+# cycle -- but neither holds an internal name.
+#
+# The scale measurement keeps its own pass below. Its @(test) procedures are
+# behind `when #config(RECORD_SCALE, false)` so the ordinary run does not
+# execute a wall-clock budget in a debug build; only the tests are guarded,
+# not the helpers, because an unused import is an error in Odin and an unused
+# procedure is not.
+PKGS := record record/ingest tests/ingest tests/readme
 
 # There is no Term_ID width matrix here, deliberately. The family's dual-width
 # convention exists because odin-rdf-store makes ID width a build-time choice
@@ -26,7 +36,7 @@ PKGS := record record/ingest tests/tool tests/proof tests/ingest tests/readme
 # (par. 3) -- because the inline encoding is frozen at first write (par. 3.3)
 # and a build knob would put that freeze at the mercy of a flag.
 
-.PHONY: all help test check tool clean
+.PHONY: all help test check api tool clean
 
 all: test
 
@@ -47,16 +57,30 @@ test: tool ## Run the test suite
 		echo "-- $$pkg --"; \
 		odin test $$pkg $(TEST_FLAGS) || exit 1; \
 	done
-	@echo "-- tests/scale (optimized) --"
-	@odin test tests/scale $(TEST_FLAGS) -o:speed
+	@echo "-- record scale measurement (optimized) --"
+	@odin test record $(TEST_FLAGS) -define:RECORD_SCALE=true -o:speed
 
-check: ## Vet every package
-	@for pkg in $(PKGS) tests/scale; do \
+check: ## Vet every package, then check the public surface
+	@for pkg in $(PKGS); do \
 		echo "-- $$pkg --"; \
 		odin check $$pkg -no-entry-point -vet -strict-style $(COLL) || exit 1; \
 	done
+	@echo "-- record (RECORD_SCALE) --"
+	@odin check record -no-entry-point -vet -strict-style $(COLL) -define:RECORD_SCALE=true
 	@echo "-- tool --"
 	@odin check tool -vet -strict-style $(COLL)
+	@$(MAKE) --no-print-directory api
+
+# What this package exports is a decision, not a residue (RECORD-I-0005).
+# doc/api-surface.txt states it; this target holds it. `odin doc` is the input
+# because it is the compiler's own view of what is reachable -- a name that
+# stops being @(private) shows up here whether or not anything uses it yet.
+# Runs as part of `check`, so CI carries it on every runner.
+api: ## Check the exported surface against doc/api-surface.txt
+	@echo "-- api surface --"
+	@command -v python3 >/dev/null 2>&1 || \
+		{ echo "error: python3 is required — the surface check runs tests/api/api_surface.py"; exit 1; }
+	@python3 tests/api/api_surface.py check
 
 # The CLI (log.md par. 12 q6): verify, dump, head — the auditor's read
 # surface, a consumer of the record package like any other.

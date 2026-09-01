@@ -31,6 +31,7 @@ import "rdf:rdf"
 // Term_Error is how the encoder and the intern refuse. Both are total
 // over every term the format can represent; these are the terms it
 // cannot, and one the probe cannot answer.
+@(private)
 Term_Error :: enum u8 {
 	None,
 	Unsupported_Term, // a language tag over 255 bytes, a base direction with no language, a nil term — the format has no encoding for it
@@ -43,6 +44,7 @@ Term_Error :: enum u8 {
 // as ids, not IRIs) — term_encode's one callback, the mirror of
 // term_decode's Resolve_Iri. A probe answers from the published
 // dictionary and fails on a miss; the intern answers by interning.
+@(private)
 Resolve_Datatype :: proc(data: rawptr, iri: rdf.IRI) -> (id: u64, ok: bool)
 
 // Resolve_Term_ID resolves a triple term's component to the on-disk id
@@ -56,6 +58,7 @@ Resolve_Datatype :: proc(data: rawptr, iri: rdf.IRI) -> (id: u64, ok: bool)
 //
 // nil refuses every triple term, which is what term_encode did before
 // RECORD-I-0004 and what a caller with no dictionary wants.
+@(private)
 Resolve_Term_ID :: proc(data: rawptr, t: rdf.Term) -> (id: u64, ok: bool)
 
 // term_inline is the inline gate: the resident id of a literal the
@@ -67,6 +70,7 @@ Resolve_Term_ID :: proc(data: rawptr, t: rdf.Term) -> (id: u64, ok: bool)
 // term), and so does "1"^^xsd:boolean. That is RDF term identity; value
 // equality across lexical forms is an engine's business. The inverse
 // of inline_term.
+@(private)
 term_inline :: proc(t: rdf.Term) -> (id: Term_ID, ok: bool) {
 	lit, is_lit := t.(rdf.Literal)
 	if !is_lit || lit.language != "" || lit.direction != .None {
@@ -114,6 +118,7 @@ term_inline :: proc(t: rdf.Term) -> (id: Term_ID, ok: bool) {
 // ordering is what makes a triple term's components canonical, and so
 // what makes par. 3.2's injectivity hold for tag 0x07: one term, one id,
 // one encoding.
+@(private)
 term_encode :: proc(
 	t: rdf.Term,
 	resolve: Resolve_Datatype,
@@ -225,6 +230,7 @@ term_encode :: proc(
 // The snapshot is borrowed, not held: the caller keeps it acquired for
 // the intern's lifetime. Not safe against a concurrent intern_term on
 // the same table — there is one writer, and this is its scratch.
+@(private)
 Intern :: struct {
 	snap:      Snapshot,
 	pending:   map[string]Term_ID,
@@ -242,6 +248,7 @@ Intern :: struct {
 // intern_init readies an empty table over the published dictionary
 // `snap` sees. Every definition's bytes and the map come from
 // `allocator` and go back with intern_destroy.
+@(private)
 intern_init :: proc(it: ^Intern, snap: Snapshot, allocator := context.allocator) {
 	assert(snap.idx != nil, "intern_init: a released snapshot")
 	it.snap = snap
@@ -252,6 +259,7 @@ intern_init :: proc(it: ^Intern, snap: Snapshot, allocator := context.allocator)
 
 // intern_destroy frees the table and every definition it holds. The
 // slice intern_defs returned is dead after this.
+@(private)
 intern_destroy :: proc(it: ^Intern) {
 	for d in it.defs {
 		delete(d.enc, it.allocator)
@@ -265,6 +273,7 @@ intern_destroy :: proc(it: ^Intern) {
 // from n_terms + 1, in the order the intern first saw each term, which
 // is the order commit_encode requires. A view into the table, valid
 // until the next intern_term or intern_destroy.
+@(private)
 intern_defs :: proc(it: ^Intern) -> []Term_Def {
 	return it.defs[:]
 }
@@ -291,6 +300,7 @@ intern_defs :: proc(it: ^Intern) -> []Term_Def {
 // Refuses what the encoder refuses, with nothing recorded: an
 // unsupported term leaves the table as it found it, components a
 // recursion had already defined included.
+@(private)
 intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: Term_ID, err: Term_Error) {
 	if iid, inlined := term_inline(t); inlined {
 		return iid, .None
@@ -342,6 +352,7 @@ intern_term :: proc(it: ^Intern, t: rdf.Term) -> (id: Term_ID, err: Term_Error) 
 // use); an IRI or a blank node interns like any term. That a label is
 // never a literal, and so never inlined, is the type's doing
 // (rdf.Graph_Label) rather than a check here.
+@(private)
 intern_graph :: proc(it: ^Intern, g: rdf.Graph_Label) -> (id: Term_ID, err: Term_Error) {
 	switch v in g {
 	case rdf.IRI:

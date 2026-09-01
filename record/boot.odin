@@ -24,6 +24,7 @@ package record
 // comparison. A reasoner's arrival grows this payload (engine version,
 // rule set id and hash, par. 5.5) and writes a differing note at the
 // next startup, exactly as designed.
+@(private)
 ENV_NOTE_V1 :: `{"format":1,"derived":"none"}`
 
 // store_open boots a store from its directory: log.md par. 7.2's

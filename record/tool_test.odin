@@ -1,10 +1,9 @@
-package tool_test
+package record
 
 import "core:fmt"
 import "core:os"
 import "core:testing"
 
-import rec "../../record"
 
 // The CLI's end-to-end test (RECORD-T-0005): build a known log with
 // the library's writer, run the built binary over it — `make test`
@@ -15,9 +14,12 @@ import rec "../../record"
 // assert (which this store's writer never produces in practice,
 // RECORD-A-0002, but the format defines and the tool must read).
 
+@(private = "file")
 BIN :: "build/record"
+@(private = "file")
 DIR :: "build/tool-test"
 
+@(private = "file")
 WALL :: u64(1_700_000_000_000_000_000)
 
 @(private)
@@ -34,38 +36,38 @@ build_store :: proc(t: ^testing.T) -> (head_hex: string) {
 	os.remove(DIR + "/000001.rlog")
 	os.remove(DIR + "/HEAD")
 
-	w, err := rec.writer_create(DIR, rec.posix_file_ops())
-	defer rec.writer_destroy(&w)
-	testing.expect_value(t, err, rec.Writer_Error.None)
+	w, err := writer_create(DIR, posix_file_ops())
+	defer writer_destroy(&w)
+	testing.expect_value(t, err, Writer_Error.None)
 
-	terms := [4]rec.Term_Def{
+	terms := [4]Term_Def{
 		{id = 1, enc = transmute([]u8)string("\x01http://example.org/s")},
 		{id = 2, enc = transmute([]u8)string("\x01http://example.org/p")},
 		{id = 3, enc = transmute([]u8)string("\x04\x02enAlice")},
 		{id = 4, enc = transmute([]u8)string("\x01http://example.org/g")},
 	}
-	five, _ := rec.inline_integer(5)
-	ops1 := [2]rec.Fact_Op{
-		{op = .Assert, s = 1, p = 2, o = five, g = rec.DEFAULT_GRAPH},
+	five, _ := inline_integer(5)
+	ops1 := [2]Fact_Op{
+		{op = .Assert, s = 1, p = 2, o = five, g = DEFAULT_GRAPH},
 		{op = .Assert, s = 1, p = 2, o = 3, g = 4},
 	}
 	testing.expect_value(
 		t,
-		rec.writer_commit(&w, {epoch = 1, wall = WALL, terms = terms[:], ops = ops1[:]}),
-		rec.Writer_Error.None,
+		writer_commit(&w, {epoch = 1, wall = WALL, terms = terms[:], ops = ops1[:]}),
+		Writer_Error.None,
 	)
-	ops2 := [2]rec.Fact_Op{
-		{op = .Retract, s = 1, p = 2, o = five, g = rec.DEFAULT_GRAPH},
-		{op = .Assert_Derived, s = 1, p = 2, o = 4, g = rec.DEFAULT_GRAPH},
+	ops2 := [2]Fact_Op{
+		{op = .Retract, s = 1, p = 2, o = five, g = DEFAULT_GRAPH},
+		{op = .Assert_Derived, s = 1, p = 2, o = 4, g = DEFAULT_GRAPH},
 	}
 	testing.expect_value(
 		t,
-		rec.writer_commit(&w, {epoch = 2, wall = WALL + 1, actor = 1, ops = ops2[:]}),
-		rec.Writer_Error.None,
+		writer_commit(&w, {epoch = 2, wall = WALL + 1, actor = 1, ops = ops2[:]}),
+		Writer_Error.None,
 	)
 
 	hex := "0123456789abcdef"
-	buf: [rec.HASH_SIZE * 2]u8
+	buf: [HASH_SIZE * 2]u8
 	for b, i in w.head {
 		buf[i*2] = hex[b>>4]
 		buf[i*2+1] = hex[b&0xF]

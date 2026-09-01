@@ -35,6 +35,7 @@ package record
 // terms the margin is 20,000x; the assertion exists because this is
 // the boundary where the derived representation makes its scale
 // assumption, and an assumption belongs where it is checked.
+@(private)
 RESIDENT_ID_LIMIT :: u64(1) << 31
 
 // Consumer is the replay seam: one procedure per thing a record can
@@ -59,6 +60,7 @@ RESIDENT_ID_LIMIT :: u64(1) << 31
 // knows is not live, an allocation failure) without this layer
 // guessing at their taxonomy. A nil procedure skips that delivery —
 // the checks above still run; only the call is omitted.
+@(private)
 Consumer :: struct {
 	data:   rawptr,
 	commit: proc(data: rawptr, epoch, wall, actor, reason: u64) -> bool,
@@ -75,6 +77,7 @@ Consumer :: struct {
 // can recover after without replaying again. On a halting verdict the
 // consumer has received every record before the damage and nothing at
 // or after it.
+@(private)
 replay :: proc(
 	dir: string,
 	ops: File_Ops,

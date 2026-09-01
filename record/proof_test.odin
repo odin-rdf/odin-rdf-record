@@ -1,10 +1,9 @@
-package proof_test
+package record
 
 import "core:fmt"
 import "core:os"
 import "core:testing"
 
-import rec "../../record"
 import "rdf:rdf"
 
 // The cross-implementation suite (RECORD-T-0006): the Odin verifier
@@ -22,16 +21,20 @@ import "rdf:rdf"
 //	torn-header <segment> 0 <head-hex> <last-epoch>
 //	<halting-verdict-word>
 
+@(private = "file")
 STORE :: "build/proof/store"
+@(private = "file")
 CASE_DIR :: "build/proof/case"
+@(private = "file")
 PY :: "tests/verify/rdflog_verify.py"
 
+@(private = "file")
 WALL :: u64(1_700_000_000_000_000_000)
 
 // The clean store's state, set once by build_proof_store and read by
 // the crafting cases.
 @(private = "file")
-proof_head: [rec.HASH_SIZE]u8
+proof_head: [HASH_SIZE]u8
 @(private = "file")
 proof_epoch: u64
 @(private = "file")
@@ -60,35 +63,35 @@ build_proof_store :: proc(t: ^testing.T) {
 	}
 	os.remove(STORE + "/HEAD")
 
-	w, err := rec.writer_create(STORE, rec.posix_file_ops())
-	testing.expect_value(t, err, rec.Writer_Error.None)
+	w, err := writer_create(STORE, posix_file_ops())
+	testing.expect_value(t, err, Writer_Error.None)
 
-	terms1 := [2]rec.Term_Def{
+	terms1 := [2]Term_Def{
 		{id = 1, enc = transmute([]u8)string("\x01http://example.org/a")},
 		{id = 2, enc = transmute([]u8)string("\x01http://example.org/b")},
 	}
-	five, _ := rec.inline_integer(5)
-	ops1 := [2]rec.Fact_Op{
-		{op = .Assert, s = 1, p = 2, o = five, g = rec.DEFAULT_GRAPH},
+	five, _ := inline_integer(5)
+	ops1 := [2]Fact_Op{
+		{op = .Assert, s = 1, p = 2, o = five, g = DEFAULT_GRAPH},
 		{op = .Assert, s = 2, p = 2, o = 1, g = 1},
 	}
-	testing.expect_value(t, rec.writer_commit(&w, {epoch = 1, wall = WALL, terms = terms1[:], ops = ops1[:]}), rec.Writer_Error.None)
-	testing.expect_value(t, rec.writer_note(&w, transmute([]u8)string(`{"format":1}`)), rec.Writer_Error.None)
-	testing.expect_value(t, rec.writer_seal(&w), rec.Writer_Error.None)
+	testing.expect_value(t, writer_commit(&w, {epoch = 1, wall = WALL, terms = terms1[:], ops = ops1[:]}), Writer_Error.None)
+	testing.expect_value(t, writer_note(&w, transmute([]u8)string(`{"format":1}`)), Writer_Error.None)
+	testing.expect_value(t, writer_seal(&w), Writer_Error.None)
 
-	terms2 := [1]rec.Term_Def{{id = 3, enc = transmute([]u8)string("\x01http://example.org/c")}}
-	ops2 := [2]rec.Fact_Op{
+	terms2 := [1]Term_Def{{id = 3, enc = transmute([]u8)string("\x01http://example.org/c")}}
+	ops2 := [2]Fact_Op{
 		{op = .Assert, s = 3, p = 2, o = 1, g = 1},
-		{op = .Retract, s = 1, p = 2, o = five, g = rec.DEFAULT_GRAPH},
+		{op = .Retract, s = 1, p = 2, o = five, g = DEFAULT_GRAPH},
 	}
-	testing.expect_value(t, rec.writer_commit(&w, {epoch = 2, wall = WALL + 1, terms = terms2[:], ops = ops2[:]}), rec.Writer_Error.None)
-	testing.expect_value(t, rec.writer_seal(&w), rec.Writer_Error.None)
+	testing.expect_value(t, writer_commit(&w, {epoch = 2, wall = WALL + 1, terms = terms2[:], ops = ops2[:]}), Writer_Error.None)
+	testing.expect_value(t, writer_seal(&w), Writer_Error.None)
 
-	ops3 := [1]rec.Fact_Op{{op = .Assert, s = 2, p = 2, o = 3, g = rec.DEFAULT_GRAPH}}
-	testing.expect_value(t, rec.writer_commit(&w, {epoch = 3, wall = WALL + 2, ops = ops3[:]}), rec.Writer_Error.None)
-	ops4 := [1]rec.Fact_Op{{op = .Retract, s = 2, p = 2, o = 3, g = rec.DEFAULT_GRAPH}}
-	testing.expect_value(t, rec.writer_commit(&w, {epoch = 4, wall = WALL + 3, ops = ops4[:]}), rec.Writer_Error.None)
-	testing.expect_value(t, rec.writer_destroy(&w), rec.Writer_Error.None)
+	ops3 := [1]Fact_Op{{op = .Assert, s = 2, p = 2, o = 3, g = DEFAULT_GRAPH}}
+	testing.expect_value(t, writer_commit(&w, {epoch = 3, wall = WALL + 2, ops = ops3[:]}), Writer_Error.None)
+	ops4 := [1]Fact_Op{{op = .Retract, s = 2, p = 2, o = 3, g = DEFAULT_GRAPH}}
+	testing.expect_value(t, writer_commit(&w, {epoch = 4, wall = WALL + 3, ops = ops4[:]}), Writer_Error.None)
+	testing.expect_value(t, writer_destroy(&w), Writer_Error.None)
 
 	// The corpus substrate is a resumed-and-grown store (RECORD-T-0011):
 	// boot end to end through store_open — which appends the startup
@@ -96,32 +99,32 @@ build_proof_store :: proc(t: ^testing.T) {
 	// — then one more epoch through the resumed writer. Every clean and
 	// injured case downstream now also proves that resume produced a
 	// chain an independent implementation accepts.
-	s: rec.Store
-	tear, oerr, lerr, werr := rec.store_open(&s, STORE, rec.posix_file_ops())
-	testing.expect_value(t, oerr, rec.Open_Error.None)
-	testing.expect_value(t, lerr, rec.Load_Error.None)
-	testing.expect_value(t, werr, rec.Writer_Error.None)
-	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
-	ops5 := [1]rec.Fact_Op{{op = .Assert, s = 3, p = 2, o = five, g = 1}}
-	testing.expect_value(t, rec.writer_commit(&s.writer, {epoch = 5, wall = WALL + 4, ops = ops5[:]}), rec.Writer_Error.None)
+	s: Store
+	tear, oerr, lerr, werr := store_open(&s, STORE, posix_file_ops())
+	testing.expect_value(t, oerr, Open_Error.None)
+	testing.expect_value(t, lerr, Load_Error.None)
+	testing.expect_value(t, werr, Writer_Error.None)
+	testing.expect_value(t, tear.kind, Tear_Kind.None)
+	ops5 := [1]Fact_Op{{op = .Assert, s = 3, p = 2, o = five, g = 1}}
+	testing.expect_value(t, writer_commit(&s.writer, {epoch = 5, wall = WALL + 4, ops = ops5[:]}), Writer_Error.None)
 
 	proof_head = s.writer.head
 	proof_epoch = s.writer.prev_epoch
 	proof_next_term = s.writer.next_term_id
-	rec.store_close(&s)
+	store_close(&s)
 }
 
 @(private = "file")
 offsets_of :: proc(data: []byte) -> (offs: [dynamic]int) {
-	offset := rec.HEADER_SIZE
-	rest := data[rec.HEADER_SIZE:]
+	offset := HEADER_SIZE
+	rest := data[HEADER_SIZE:]
 	for {
-		body, next_rest, status := rec.frame_next(rest)
+		body, next_rest, status := frame_next(rest)
 		if status != .Ok {
 			return
 		}
 		append(&offs, offset)
-		offset += rec.FRAME_OVERHEAD + len(body)
+		offset += FRAME_OVERHEAD + len(body)
 		rest = next_rest
 	}
 }
@@ -130,26 +133,26 @@ offsets_of :: proc(data: []byte) -> (offs: [dynamic]int) {
 append_framed :: proc(seg: ^[dynamic]u8, body: []byte) {
 	buf: [dynamic]u8
 	defer delete(buf)
-	rec.frame_append(&buf, body)
+	frame_append(&buf, body)
 	append(seg, ..buf[:])
 }
 
 @(private = "file")
-hex_of :: proc(h: [rec.HASH_SIZE]u8, buf: []byte) -> string {
+hex_of :: proc(h: [HASH_SIZE]u8, buf: []byte) -> string {
 	hex := "0123456789abcdef"
 	for b, i in h {
 		buf[i*2] = hex[b>>4]
 		buf[i*2+1] = hex[b&0xF]
 	}
-	return string(buf[:rec.HASH_SIZE*2])
+	return string(buf[:HASH_SIZE*2])
 }
 
 // canon renders record.verify's answer in the Python verifier's line
 // format, so agreement is one string comparison covering the verdict,
 // the head hash, the epoch, and the tear location at once.
 @(private = "file")
-canon :: proc(r: rec.Verify_Result, tear: rec.Tear, err: rec.Open_Error) -> string {
-	buf: [rec.HASH_SIZE * 2]u8
+canon :: proc(r: Verify_Result, tear: Tear, err: Open_Error) -> string {
+	buf: [HASH_SIZE * 2]u8
 	#partial switch err {
 	case .None:
 		return fmt.tprintf("clean %s %d", hex_of(r.head, buf[:]), r.last_epoch)
@@ -238,14 +241,14 @@ mut_unknown_kind_sealed :: proc(segs: [][dynamic]u8) {
 mut_flip_sealed_body :: proc(segs: [][dynamic]u8) {
 	offs := offsets_of(segs[0][:])
 	defer delete(offs)
-	segs[0][offs[0]+rec.FRAME_OVERHEAD+5] ~= 0x01
+	segs[0][offs[0]+FRAME_OVERHEAD+5] ~= 0x01
 }
 
 @(private = "file")
 mut_flip_sealed_seal :: proc(segs: [][dynamic]u8) {
 	offs := offsets_of(segs[0][:])
 	defer delete(offs)
-	segs[0][offs[len(offs)-1]+rec.FRAME_OVERHEAD+5] ~= 0x01
+	segs[0][offs[len(offs)-1]+FRAME_OVERHEAD+5] ~= 0x01
 }
 
 @(private = "file")
@@ -253,7 +256,7 @@ mut_flip_before_tail :: proc(segs: [][dynamic]u8) {
 	seg := &segs[len(segs)-1]
 	offs := offsets_of(seg[:])
 	defer delete(offs)
-	seg[offs[0]+rec.FRAME_OVERHEAD+5] ~= 0x01
+	seg[offs[0]+FRAME_OVERHEAD+5] ~= 0x01
 }
 
 @(private = "file")
@@ -261,7 +264,7 @@ mut_flip_final_record :: proc(segs: [][dynamic]u8) {
 	seg := &segs[len(segs)-1]
 	offs := offsets_of(seg[:])
 	defer delete(offs)
-	seg[offs[len(offs)-1]+rec.FRAME_OVERHEAD+5] ~= 0x01
+	seg[offs[len(offs)-1]+FRAME_OVERHEAD+5] ~= 0x01
 }
 
 @(private = "file")
@@ -280,35 +283,35 @@ mut_bad_base_hash :: proc(segs: [][dynamic]u8) {
 }
 
 @(private = "file")
-reencode_header :: proc(seg: ^[dynamic]u8, mutate: proc(h: ^rec.Segment_Header)) {
-	hdr, err := rec.header_decode(seg[:])
+reencode_header :: proc(seg: ^[dynamic]u8, mutate: proc(h: ^Segment_Header)) {
+	hdr, err := header_decode(seg[:])
 	assert(err == .None)
 	mutate(&hdr)
-	enc: [rec.HEADER_SIZE]u8
-	rec.header_encode(hdr, &enc)
-	copy(seg[:rec.HEADER_SIZE], enc[:])
+	enc: [HEADER_SIZE]u8
+	header_encode(hdr, &enc)
+	copy(seg[:HEADER_SIZE], enc[:])
 }
 
 @(private = "file")
 mut_wrong_segment_no :: proc(segs: [][dynamic]u8) {
-	reencode_header(&segs[1], proc(h: ^rec.Segment_Header) {h.segment = 9})
+	reencode_header(&segs[1], proc(h: ^Segment_Header) {h.segment = 9})
 }
 
 @(private = "file")
 mut_wrong_first_epoch :: proc(segs: [][dynamic]u8) {
-	reencode_header(&segs[1], proc(h: ^rec.Segment_Header) {h.first_epoch += 1})
+	reencode_header(&segs[1], proc(h: ^Segment_Header) {h.first_epoch += 1})
 }
 
 @(private = "file")
 mut_wrong_first_fact :: proc(segs: [][dynamic]u8) {
-	reencode_header(&segs[1], proc(h: ^rec.Segment_Header) {h.first_fact_id += 1})
+	reencode_header(&segs[1], proc(h: ^Segment_Header) {h.first_fact_id += 1})
 }
 
 @(private = "file")
 mut_future_version :: proc(segs: [][dynamic]u8) {
 	seg := &segs[len(segs)-1]
-	resize(seg, rec.HEADER_SIZE)
-	reencode_header(seg, proc(h: ^rec.Segment_Header) {h.version = rec.FORMAT_VERSION + 1})
+	resize(seg, HEADER_SIZE)
+	reencode_header(seg, proc(h: ^Segment_Header) {h.version = FORMAT_VERSION + 1})
 }
 
 @(private = "file")
@@ -324,7 +327,7 @@ mut_husk_partial :: proc(segs: [][dynamic]u8) {
 @(private = "file")
 mut_husk_garbage :: proc(segs: [][dynamic]u8) {
 	seg := &segs[len(segs)-1]
-	resize(seg, rec.HEADER_SIZE)
+	resize(seg, HEADER_SIZE)
 	for &b in seg[:] {
 		b = 0xAA
 	}
@@ -332,8 +335,8 @@ mut_husk_garbage :: proc(segs: [][dynamic]u8) {
 
 @(private = "file")
 mut_epoch_gap :: proc(segs: [][dynamic]u8) {
-	ops := [1]rec.Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = rec.DEFAULT_GRAPH}}
-	body, err := rec.commit_encode(
+	ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = DEFAULT_GRAPH}}
+	body, err := commit_encode(
 		{epoch = proof_epoch + 2, wall = WALL, ops = ops[:]},
 		proof_head, proof_epoch + 1, proof_next_term,
 	)
@@ -346,8 +349,8 @@ mut_epoch_gap :: proc(segs: [][dynamic]u8) {
 mut_chain_broken_prev :: proc(segs: [][dynamic]u8) {
 	bad := proof_head
 	bad[0] ~= 0x01
-	ops := [1]rec.Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = rec.DEFAULT_GRAPH}}
-	body, err := rec.commit_encode({epoch = proof_epoch + 1, wall = WALL, ops = ops[:]}, bad, proof_epoch, proof_next_term)
+	ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = DEFAULT_GRAPH}}
+	body, err := commit_encode({epoch = proof_epoch + 1, wall = WALL, ops = ops[:]}, bad, proof_epoch, proof_next_term)
 	assert(err == .None)
 	defer delete(body)
 	append_framed(&segs[len(segs)-1], body)
@@ -355,8 +358,8 @@ mut_chain_broken_prev :: proc(segs: [][dynamic]u8) {
 
 @(private = "file")
 mut_chain_broken_hash :: proc(segs: [][dynamic]u8) {
-	ops := [1]rec.Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = rec.DEFAULT_GRAPH}}
-	body, err := rec.commit_encode({epoch = proof_epoch + 1, wall = WALL, ops = ops[:]}, proof_head, proof_epoch, proof_next_term)
+	ops := [1]Fact_Op{{op = .Assert, s = 1, p = 2, o = 3, g = DEFAULT_GRAPH}}
+	body, err := commit_encode({epoch = proof_epoch + 1, wall = WALL, ops = ops[:]}, proof_head, proof_epoch, proof_next_term)
 	assert(err == .None)
 	defer delete(body)
 	body[len(body)-1] ~= 0x01
@@ -442,7 +445,7 @@ test_cross_implementation :: proc(t: ^testing.T) {
 		delete(segs)
 
 		// Both implementations, one canonical line each.
-		r, tear, verr := rec.verify(CASE_DIR, rec.posix_file_ops())
+		r, tear, verr := verify(CASE_DIR, posix_file_ops())
 		odin_line := canon(r, tear, verr)
 
 		state, stdout, stderr, perr := os.process_exec(
@@ -477,13 +480,14 @@ test_cross_implementation :: proc(t: ^testing.T) {
 
 // --- the apply-written corpus (RECORD-T-0015) ------------------------------
 
+@(private = "file")
 APPLY_STORE :: "build/proof/apply"
 
 // verify_both runs both implementations over a directory and returns
 // their canonical lines, in the temp allocator.
 @(private = "file")
 verify_both :: proc(t: ^testing.T, dir: string) -> (odin_line, py_line: string) {
-	r, tear, verr := rec.verify(dir, rec.posix_file_ops())
+	r, tear, verr := verify(dir, posix_file_ops())
 	odin_line = canon(r, tear, verr)
 	state, stdout, stderr, perr := os.process_exec({command = {"python3", PY, dir}}, context.allocator)
 	defer delete(stdout)
@@ -514,11 +518,11 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 	}
 	os.remove(APPLY_STORE + "/HEAD")
 
-	s: rec.Store
-	_, oerr, lerr, werr := rec.store_open(&s, APPLY_STORE, rec.posix_file_ops(), target_size = 600)
-	testing.expect_value(t, oerr, rec.Open_Error.None)
-	testing.expect_value(t, lerr, rec.Load_Error.None)
-	testing.expect_value(t, werr, rec.Writer_Error.None)
+	s: Store
+	_, oerr, lerr, werr := store_open(&s, APPLY_STORE, posix_file_ops(), target_size = 600)
+	testing.expect_value(t, oerr, Open_Error.None)
+	testing.expect_value(t, lerr, Load_Error.None)
+	testing.expect_value(t, werr, Writer_Error.None)
 	alice, knows := rdf.IRI("http://example.org/alice"), rdf.IRI("http://example.org/knows")
 	g := rdf.IRI("http://example.org/g")
 	quad :: proc(s, p, o: rdf.Term, g: rdf.Graph_Label = nil) -> rdf.Quad {
@@ -529,13 +533,13 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 	// tag 0x07.
 	inner := rdf.Triple{alice, knows, rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}}
 	outer := rdf.Triple{alice, knows, &inner}
-	changesets := [?][]rec.Op{
+	changesets := [?][]Op{
 		{{.Assert, quad(alice, knows, rdf.IRI("http://example.org/bob"))}},
 		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "5", datatype = rdf.XSD_INTEGER}, g)}},
 		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "Alice", datatype = rdf.RDF_LANG_STRING, language = "en"})}},
 		{{.Retract, quad(alice, knows, rdf.IRI("http://example.org/bob"))}, {.Assert, quad(rdf.Blank_Node("b0"), knows, alice, g)}},
 		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "1.5", datatype = "http://www.w3.org/2001/XMLSchema#decimal"})}},
-		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "2024-02-29", datatype = rec.XSD_DATE}, g)}},
+		{{.Assert, quad(alice, knows, rdf.Literal{lexical = "2024-02-29", datatype = XSD_DATE}, g)}},
 		// RDF 1.2's two kinds (RECORD-T-0025). A triple term defines
 		// several terms for one op and its encoding references three
 		// ids; a base-direction literal is the format's newest tag. Both
@@ -548,13 +552,13 @@ test_cross_implementation_apply :: proc(t: ^testing.T) {
 		{{.Assert, quad(alice, knows, &outer, g)}},
 	}
 	for cs, i in changesets {
-		e, _, aerr := rec.apply(&s, {ops = cs, actor = alice, reason = rdf.Literal{lexical = "proof", datatype = rdf.XSD_STRING}})
-		testing.expect_value(t, aerr, rec.Apply_Error{})
-		testing.expect_value(t, e, rec.Epoch(i+1))
+		e, _, aerr := apply(&s, {ops = cs, actor = alice, reason = rdf.Literal{lexical = "proof", datatype = rdf.XSD_STRING}})
+		testing.expect_value(t, aerr, Apply_Error{})
+		testing.expect_value(t, e, Epoch(i+1))
 	}
 	testing.expect(t, s.writer.seg_no >= 2, "the log rotated under apply")
 	head := s.writer.head
-	testing.expect_value(t, rec.store_close(&s), rec.Writer_Error.None)
+	testing.expect_value(t, store_close(&s), Writer_Error.None)
 
 	odin_line, py_line := verify_both(t, APPLY_STORE)
 	hexbuf: [64]byte

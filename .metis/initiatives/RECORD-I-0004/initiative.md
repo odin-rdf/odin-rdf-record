@@ -4,14 +4,14 @@ level: initiative
 title: "RDF 1.2 term kinds: triple terms and base direction, for the SPARQL port"
 short_code: "RECORD-I-0004"
 created_at: 2026-08-24T19:26:59.050876+00:00
-updated_at: 2026-08-24T21:23:26.462557+00:00
+updated_at: 2026-09-01T11:05:57.095185+00:00
 parent: RECORD-V-0001
 blocked_by: []
 archived: false
 
 tags:
   - "#initiative"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false

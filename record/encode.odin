@@ -22,22 +22,30 @@ package record
 import "core:crypto/sha2"
 
 // The fixed shape of the format (log.md par. 3, par. 4).
+@(private)
 MAGIC :: "RDFLOG\x00\x00"
+@(private)
 FORMAT_VERSION :: 2
+@(private)
 HEADER_SIZE :: 64
 HASH_SIZE :: 32
+@(private)
 FRAME_OVERHEAD :: 8
+@(private)
 MAX_RECORD_SIZE :: 64 * 1024 * 1024
+@(private)
 OP_SIZE :: 33
 
 // DEFAULT_GRAPH is the graph component of a fact in the default graph
 // (log.md par. 5.3, amended 2026-08-19): 0, the same "none" that actor
 // and reason use, because an absent graph name is the default graph.
 // Valid in G and nowhere else — S, P, and O may never be 0.
+@(private)
 DEFAULT_GRAPH :: u64(0)
 
 // Record_Kind is a body's first byte. Kinds 0x04..0x7F are reserved;
 // a reader that meets one in a sealed segment must fail, not skip.
+@(private)
 Record_Kind :: enum u8 {
 	Invalid          = 0x00,
 	Epoch_Commit     = 0x01,
@@ -64,19 +72,29 @@ Op_Kind :: enum u8 {
 // use. The writer restricts payloads to what the 32-bit resident
 // scheme can hold (RECORD-A-0001): boolean 0/1, integer and date
 // within ±2^27 of the bias.
+@(private)
 INLINE_FLAG :: u64(1) << 63
+@(private)
 INLINE_TAG_SHIFT :: 56
+@(private)
 INLINE_PAYLOAD_MASK :: (u64(1) << 56) - 1
+@(private)
 INLINE_BIAS :: u64(1) << 55
+@(private)
 INLINE_TAG_BOOLEAN :: u8(0x01)
+@(private)
 INLINE_TAG_INTEGER :: u8(0x02)
+@(private)
 INLINE_TAG_DATE :: u8(0x03)
+@(private)
 INLINE_VALUE_MIN :: -(i64(1) << 27)
+@(private)
 INLINE_VALUE_MAX :: i64(1)<<27 - 1
 
 // Encode_Error is what commit_encode and friends refuse with. Every
 // case is a caller bug, not an environmental condition: nothing here
 // can fail for a reason the caller did not put in the arguments.
+@(private)
 Encode_Error :: enum {
 	None,
 	Epoch_Gap,    // epoch is not prev_epoch + 1 (log.md par. 5.1)
@@ -89,6 +107,7 @@ Encode_Error :: enum {
 
 // Decode_Error is what the decoders refuse with. Structure is judged
 // here; values are the consumer's business.
+@(private)
 Decode_Error :: enum {
 	None,
 	Truncated,    // the body ends before its own fields say it should
@@ -104,6 +123,7 @@ Decode_Error :: enum {
 // terms. Position decides what Torn means: only the final frame of the
 // open segment may be recovered by truncation — anywhere else it is
 // corruption, and that judgement belongs to the open path, not here.
+@(private)
 Frame_Status :: enum {
 	Ok,
 	Clean_End, // fewer than FRAME_OVERHEAD bytes remain
@@ -114,6 +134,7 @@ Frame_Status :: enum {
 // (log.md par. 3). The CRC covers bytes 0..27 only: the base hash is
 // verified by equality against the previous segment's head, a stronger
 // check than any checksum.
+@(private)
 Segment_Header :: struct {
 	version:       u32,
 	segment:       u32,
@@ -126,6 +147,7 @@ Segment_Header :: struct {
 // par. 5.2). The encoding is architecture.md par. 3.2's canonical form
 // carried verbatim — opaque bytes to this layer. Decoded, `enc`
 // borrows from the body.
+@(private)
 Term_Def :: struct {
 	id:  u64,
 	enc: []byte,
@@ -134,6 +156,7 @@ Term_Def :: struct {
 // Fact_Op is one fact operation (log.md par. 5.3): 33 bytes on disk,
 // component order matching N-Quads. Nothing in it is 8-byte aligned,
 // which is the decoder's problem and not the reader's.
+@(private)
 Fact_Op :: struct {
 	op:         Op_Kind,
 	s, p, o, g: u64,
@@ -142,6 +165,7 @@ Fact_Op :: struct {
 // Commit is an epoch commit the writer wants encoded. Actor and reason
 // are term ids, 0 for none; wall is Unix nanoseconds UTC from the
 // writer's clock — evidence, not proof (api.md par. 2.4).
+@(private)
 Commit :: struct {
 	epoch:  u64,
 	wall:   u64,
@@ -154,6 +178,7 @@ Commit :: struct {
 // Commit_View is a decoded epoch commit. The term and op regions stay
 // raw — commit_terms and commit_ops iterate them without allocating —
 // and everything borrows from the decoded body.
+@(private)
 Commit_View :: struct {
 	epoch:       u64,
 	wall:        u64,
@@ -170,12 +195,14 @@ Commit_View :: struct {
 // Note is an environment note (log.md par. 5.5): the software
 // environment as UTF-8 JSON, chained like a commit but advancing no
 // epoch. last_epoch is the epoch the note follows, 0 before the first.
+@(private)
 Note :: struct {
 	last_epoch: u64,
 	payload:    []byte,
 }
 
 // Note_View is a decoded environment note; payload borrows.
+@(private)
 Note_View :: struct {
 	last_epoch: u64,
 	payload:    []byte,
@@ -188,6 +215,7 @@ Note_View :: struct {
 // the head at seal time, and the seal's own bytes are hashed into
 // nothing. sig is empty in v1 (RECORD-I-0001 non-goal); decoded, it
 // borrows.
+@(private)
 Seal :: struct {
 	last_epoch:   u64,
 	record_count: u64,
@@ -199,6 +227,7 @@ Seal :: struct {
 // record_kind reads a body's first byte. Unknown kinds are the
 // caller's error to raise — par. 4 is emphatic that skipping one
 // silently changes the reconstructed graph.
+@(private)
 record_kind :: proc(body: []byte) -> (kind: Record_Kind, ok: bool) {
 	if len(body) == 0 {
 		return .Invalid, false
@@ -215,6 +244,7 @@ record_kind :: proc(body: []byte) -> (kind: Record_Kind, ok: bool) {
 }
 
 // header_encode fills the fixed 64 header bytes, CRC included.
+@(private)
 header_encode :: proc(h: Segment_Header, dst: ^[HEADER_SIZE]u8) {
 	copy(dst[0:8], MAGIC)
 	put_u32_at(dst[8:], h.version)
@@ -229,6 +259,7 @@ header_encode :: proc(h: Segment_Header, dst: ^[HEADER_SIZE]u8) {
 // header_decode validates magic, version, and the CRC over bytes
 // 0..27. The base hash is returned unjudged: its check is equality
 // against the previous segment's head, which only the open path holds.
+@(private)
 header_decode :: proc(src: []byte) -> (h: Segment_Header, err: Decode_Error) {
 	if len(src) < HEADER_SIZE {
 		return {}, .Truncated
@@ -254,6 +285,7 @@ header_decode :: proc(src: []byte) -> (h: Segment_Header, err: Decode_Error) {
 // length bytes followed by the body, body. The caller guarantees the
 // body is a legal record — commit_encode and friends already refused
 // anything oversized or empty.
+@(private)
 frame_append :: proc(buf: ^[dynamic]u8, body: []byte) {
 	assert(len(body) > 0 && len(body) <= MAX_RECORD_SIZE, "frame_append: body size out of range")
 	lenb: [4]u8
@@ -269,6 +301,7 @@ frame_append :: proc(buf: ^[dynamic]u8, body: []byte) {
 // means a zero or oversized length, a body the data cannot hold, or a
 // CRC mismatch — log.md par. 7.2's taxonomy, position left to the
 // caller.
+@(private)
 frame_next :: proc(data: []byte) -> (body: []byte, rest: []byte, status: Frame_Status) {
 	if len(data) < FRAME_OVERHEAD {
 		return nil, data, .Clean_End
@@ -290,6 +323,7 @@ frame_next :: proc(data: []byte) -> (body: []byte, rest: []byte, status: Frame_S
 // inline_ok is the writer's restriction from RECORD-A-0001: an inlined
 // id must carry a tag the frozen scheme assigns and a payload the
 // 32-bit resident encoding can hold. Dictionary ids pass untouched.
+@(private)
 inline_ok :: proc(id: u64) -> bool {
 	if id & INLINE_FLAG == 0 {
 		return true
@@ -310,6 +344,7 @@ inline_ok :: proc(id: u64) -> bool {
 // the frozen range — the one inline case the writer emits today
 // (RECORD-A-0001). The caller has already refused non-canonical
 // lexical forms; this is arithmetic, not judgement.
+@(private)
 inline_integer :: proc(v: i64) -> (id: u64, ok: bool) {
 	if v < INLINE_VALUE_MIN || v > INLINE_VALUE_MAX {
 		return 0, false
@@ -328,6 +363,7 @@ inline_integer :: proc(v: i64) -> (id: u64, ok: bool) {
 // amended: a graph label is not a literal). Live-quad preconditions
 // need resident state and are Apply's business, not this layer's.
 // The returned body is allocated from `allocator`; the caller owns it.
+@(private)
 commit_encode :: proc(
 	c: Commit,
 	prev_hash: [HASH_SIZE]u8,
@@ -417,6 +453,7 @@ commit_encode :: proc(
 // and with the two hashes they must account for every byte. Values —
 // term ids, components, the hashes themselves — are the consumer's
 // and the chain walker's business.
+@(private)
 commit_decode :: proc(body: []byte) -> (v: Commit_View, err: Decode_Error) {
 	if len(body) < 41+2*HASH_SIZE {
 		return {}, .Truncated
@@ -462,15 +499,18 @@ commit_decode :: proc(body: []byte) -> (v: Commit_View, err: Decode_Error) {
 // Term_Iter walks a decoded commit's term definitions in order,
 // borrowing each encoding from the body. commit_decode validated the
 // region, so iteration cannot fail.
+@(private)
 Term_Iter :: struct {
 	rest:      []byte,
 	remaining: u32,
 }
 
+@(private)
 commit_terms :: proc(v: Commit_View) -> Term_Iter {
 	return {rest = v.terms_bytes, remaining = v.n_terms}
 }
 
+@(private)
 term_next :: proc(it: ^Term_Iter) -> (t: Term_Def, ok: bool) {
 	if it.remaining == 0 {
 		return {}, false
@@ -486,15 +526,18 @@ term_next :: proc(it: ^Term_Iter) -> (t: Term_Def, ok: bool) {
 // Op_Iter walks a decoded commit's fact operations in order. The op
 // bytes are unaligned by design (log.md par. 5.3); every component is
 // read byte-by-byte.
+@(private)
 Op_Iter :: struct {
 	rest:      []byte,
 	remaining: u32,
 }
 
+@(private)
 commit_ops :: proc(v: Commit_View) -> Op_Iter {
 	return {rest = v.ops_bytes, remaining = v.n_ops}
 }
 
+@(private)
 op_next :: proc(it: ^Op_Iter) -> (op: Fact_Op, ok: bool) {
 	if it.remaining == 0 {
 		return {}, false
@@ -512,6 +555,7 @@ op_next :: proc(it: ^Op_Iter) -> (op: Fact_Op, ok: bool) {
 // note_encode encodes an environment note, chained from prev_hash like
 // a commit — the note carries the chain (log.md par. 5.5) — but
 // advancing no epoch. The returned body is the caller's.
+@(private)
 note_encode :: proc(
 	n: Note,
 	prev_hash: [HASH_SIZE]u8,
@@ -537,6 +581,7 @@ note_encode :: proc(
 
 // note_decode validates an environment note's structure; the payload
 // borrows from the body.
+@(private)
 note_decode :: proc(body: []byte) -> (v: Note_View, err: Decode_Error) {
 	if len(body) < 13+2*HASH_SIZE {
 		return {}, .Truncated
@@ -562,6 +607,7 @@ note_decode :: proc(body: []byte) -> (v: Note_View, err: Decode_Error) {
 // chain link: final_hash is the head at seal time and the seal's own
 // bytes are hashed into nothing (log.md par. 5.4). sig is written as
 // given; v1 writers pass none.
+@(private)
 seal_encode :: proc(s: Seal, allocator := context.allocator) -> (body: []byte, err: Encode_Error) {
 	size := 57 + len(s.sig)
 	if size > MAX_RECORD_SIZE {
@@ -580,6 +626,7 @@ seal_encode :: proc(s: Seal, allocator := context.allocator) -> (body: []byte, e
 }
 
 // seal_decode validates a seal's structure; sig borrows from the body.
+@(private)
 seal_decode :: proc(body: []byte) -> (s: Seal, err: Decode_Error) {
 	if len(body) < 57 {
 		return {}, .Truncated
@@ -607,6 +654,7 @@ seal_decode :: proc(body: []byte) -> (s: Seal, err: Decode_Error) {
 // hash_ok checks a body against its own embedded hash — the local half
 // of verification; the cross-record half (prev_hash equality) is the
 // open path's walk.
+@(private)
 chain_hash :: proc(body: []byte) -> (h: [HASH_SIZE]u8) {
 	ctx: sha2.Context_256
 	sha2.init_256(&ctx)
@@ -615,6 +663,7 @@ chain_hash :: proc(body: []byte) -> (h: [HASH_SIZE]u8) {
 	return h
 }
 
+@(private)
 hash_ok :: proc(body: []byte) -> bool {
 	if len(body) < 2*HASH_SIZE+1 {
 		return false

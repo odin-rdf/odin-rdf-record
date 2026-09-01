@@ -77,6 +77,7 @@ Snapshot_Error :: enum {
 // (RECORD-A-0005 part 1); the set bounds what it reads of them with
 // n_facts and n_terms, and reads them through its own copies of the
 // chunk lists, taken at publication (package comment).
+@(private)
 Index_Set :: struct {
 	ord:     [Order][]Fact_ID, // the seven sorted FactID permutations
 	terms:   []Term_ID, // the term index: dictionary ids sorted by encoding (termindex.odin)
@@ -116,6 +117,7 @@ Snapshot :: struct {
 // so both are asserted. Boot calls it once. apply calls its two halves
 // separately — build_index_set before the fsync, for the candidate the
 // validator sees; install_index_set after it.
+@(private)
 store_publish :: proc(s: ^Store) {
 	install_index_set(s, build_index_set(s))
 }

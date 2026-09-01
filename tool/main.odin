@@ -55,6 +55,7 @@ package main
 import "core:bufio"
 import "core:fmt"
 import "core:io"
+import "core:mem"
 import "core:os"
 
 import rec "../record"
@@ -161,15 +162,23 @@ Format :: enum {
 	JSON,
 }
 
-// Dumper is the dump consumer on the replay seam: it interns nothing
-// and judges nothing — replay already verified the chain and the id
-// discipline — it only resolves ids to terms and prints.
+// Dumper is the dump consumer on record's decoded log seam
+// (record.Log_Consumer): it interns nothing, resolves nothing and judges
+// nothing — log_read verified the chain, accumulated the dictionary and
+// decoded the terms — it only prints.
+//
+// It used to do the resolving too, which is why nine of the package's
+// format internals were exported. RECORD-T-0035 moved that loop into
+// record, where it is one implementation instead of one per caller.
 Dumper :: struct {
-	dict:   [dynamic][]byte, // id-1 -> cloned canonical encoding
 	epoch:  u64,
 	wall:   u64,
-	actor:  u64,
-	reason: u64,
+	// The epoch's attribution, cloned because a term handed to a callback
+	// is valid for that call and these print once per op. Released and
+	// rebuilt at each commit.
+	actor:  rdf.Term,
+	reason: rdf.Term,
+	attrib: mem.Scratch_Allocator,
 	format: Format,
 	w:      io.Writer,
 	fail:   string, // the dumper's own failure, reported after the abort
@@ -207,17 +216,12 @@ cmd_dump :: proc(args: []string) -> int {
 		format = format,
 		w      = bufio.writer_to_stream(&buffered),
 	}
-	defer {
-		for enc in d.dict {
-			delete(enc)
-		}
-		delete(d.dict)
-	}
+	mem.scratch_allocator_init(&d.attrib, 1024)
+	defer mem.scratch_allocator_destroy(&d.attrib)
 
-	_, tear, err := rec.replay(dir, rec.posix_file_ops(), rec.Consumer{
+	_, tear, err := rec.log_read(dir, rec.posix_file_ops(), rec.Log_Consumer{
 		data   = &d,
 		commit = dump_commit,
-		term   = dump_term_def,
 		op     = dump_op,
 	})
 	bufio.writer_flush(&buffered)
@@ -232,7 +236,14 @@ cmd_dump :: proc(args: []string) -> int {
 		)
 		return 2
 	case .Consumer_Abort:
-		fmt.eprintf("dump: %s: %s\n", dir, d.fail)
+		// d.fail is set when the printer failed. An empty one means
+		// log_read itself refused -- a term of a chain-verified log that
+		// does not decode, which is corruption the CRC did not catch.
+		why := d.fail
+		if why == "" {
+			why = "a term of the log does not decode"
+		}
+		fmt.eprintf("dump: %s: %s\n", dir, why)
 		return 1
 	case:
 		fmt.eprintf("dump: %s: %v\n", dir, err)
@@ -240,75 +251,25 @@ cmd_dump :: proc(args: []string) -> int {
 	}
 }
 
-dump_commit :: proc(data: rawptr, epoch, wall, actor, reason: u64) -> bool {
+dump_commit :: proc(data: rawptr, epoch, wall: u64, actor, reason: rdf.Term) -> bool {
 	d := (^Dumper)(data)
 	d.epoch = epoch
 	d.wall = wall
-	d.actor = actor
-	d.reason = reason
+	free_all(mem.scratch_allocator(&d.attrib))
+	a := mem.scratch_allocator(&d.attrib)
+	d.actor = rdf.clone_term(actor, a)
+	d.reason = rdf.clone_term(reason, a)
 	return true
 }
 
-dump_term_def :: proc(data: rawptr, id: u64, enc: []byte) -> bool {
+dump_op :: proc(data: rawptr, epoch: u64, kind: rec.Op_Kind, q: rdf.Quad) -> bool {
 	d := (^Dumper)(data)
-	_ = id // replay enforced id == len(dict)+1 already
-	owned := make([]byte, len(enc))
-	copy(owned, enc)
-	append(&d.dict, owned)
-	return true
-}
-
-// dump_resolve answers term_decode's datatype and namespace lookups
-// from the dictionary. Only a directly-encoded IRI resolves; a split
-// IRI namespace that is itself split is refused rather than chased.
-dump_resolve :: proc(data: rawptr, id: u64) -> (string, bool) {
-	d := (^Dumper)(data)
-	if id == 0 || id > u64(len(d.dict)) {
-		return "", false
-	}
-	enc := d.dict[id-1]
-	if len(enc) < 1 || enc[0] != rec.TERM_TAG_IRI {
-		return "", false
-	}
-	return string(enc[1:]), true
-}
-
-// resolve_term materializes one op component. Replay guaranteed the id
-// is inline-legal or defined, so the only failure left is a dictionary
-// encoding this decoder cannot read — reported, never skipped.
-resolve_term :: proc(d: ^Dumper, id: u64, buf: []byte) -> (rdf.Term, bool) {
-	if id&rec.INLINE_FLAG != 0 {
-		return rec.inline_term(id, buf)
-	}
-	if id == 0 || id > u64(len(d.dict)) {
-		return nil, false
-	}
-	return rec.term_decode(d.dict[id-1], dump_resolve, d, allocator = context.temp_allocator)
-}
-
-dump_op :: proc(data: rawptr, epoch: u64, op: rec.Fact_Op) -> bool {
-	d := (^Dumper)(data)
-	defer free_all(context.temp_allocator)
-
-	bufs: [3][rec.INLINE_LEXICAL_MAX]u8
-	s, s_ok := resolve_term(d, op.s, bufs[0][:])
-	p, p_ok := resolve_term(d, op.p, bufs[1][:])
-	o, o_ok := resolve_term(d, op.o, bufs[2][:])
-	g: rdf.Term
-	g_ok := true
-	if op.g != rec.DEFAULT_GRAPH {
-		g, g_ok = resolve_term(d, op.g, nil) // never inlined; no buffer
-	}
-	if !s_ok || !p_ok || !o_ok || !g_ok {
-		d.fail = fmt.tprintf("epoch %d: a term of op (%d %d %d %d) does not decode", epoch, op.s, op.p, op.o, op.g)
-		return false
-	}
-
+	_ = epoch // the commit set it; every op of the epoch shares it
 	switch d.format {
 	case .NQuads:
-		return dump_nquads(d, op.op, s, p, o, g)
+		return dump_nquads(d, kind, q)
 	case .JSON:
-		return dump_json(d, op.op, s, p, o, g)
+		return dump_json(d, kind, q)
 	}
 	return false
 }
@@ -325,25 +286,10 @@ op_marker :: proc(kind: rec.Op_Kind) -> string {
 	return ""
 }
 
-dump_nquads :: proc(d: ^Dumper, kind: rec.Op_Kind, s, p, o, g: rdf.Term) -> bool {
-	label: rdf.Graph_Label
-	switch v in g {
-	case rdf.IRI:
-		label = v
-	case rdf.Blank_Node:
-		label = v
-	case rdf.Literal, ^rdf.Triple:
-		d.fail = fmt.tprintf("epoch %d: a literal graph label", d.epoch)
-		return false
-	case nil:
-	}
+dump_nquads :: proc(d: ^Dumper, kind: rec.Op_Kind, q: rdf.Quad) -> bool {
 	if _, werr := io.write_string(d.w, op_marker(kind)); werr != nil {
 		d.fail = "write failed"
 		return false
-	}
-	q := rdf.Quad {
-		triple = {subject = s, predicate = p, object = o},
-		graph  = label,
 	}
 	if quads.emit(d.w, q) != nil {
 		d.fail = "write failed"
@@ -364,14 +310,23 @@ op_name :: proc(kind: rec.Op_Kind) -> string {
 	return "assert"
 }
 
-dump_json :: proc(d: ^Dumper, kind: rec.Op_Kind, s, p, o, g: rdf.Term) -> bool {
+dump_json :: proc(d: ^Dumper, kind: rec.Op_Kind, q: rdf.Quad) -> bool {
 	w := d.w
+	s, p, o := q.subject, q.predicate, q.object
+	g: rdf.Term
+	switch v in q.graph {
+	case rdf.IRI:
+		g = v
+	case rdf.Blank_Node:
+		g = v
+	case nil:
+	}
 	ok := true
 	ok &&= ws(w, `{"op":"`) && ws(w, op_name(kind)) && ws(w, `","epoch":`)
 	ok &&= wu(w, d.epoch)
 	ok &&= ws(w, `,"wall":"`) && wu(w, d.wall) && ws(w, `"`)
-	ok &&= ws(w, `,"actor":`) && json_id_term(d, d.actor)
-	ok &&= ws(w, `,"reason":`) && json_id_term(d, d.reason)
+	ok &&= ws(w, `,"actor":`) && json_attrib(d, d.actor)
+	ok &&= ws(w, `,"reason":`) && json_attrib(d, d.reason)
 	ok &&= ws(w, `,"s":`) && json_term(w, s)
 	ok &&= ws(w, `,"p":`) && json_term(w, p)
 	ok &&= ws(w, `,"o":`) && json_term(w, o)
@@ -389,14 +344,10 @@ dump_json :: proc(d: ^Dumper, kind: rec.Op_Kind, s, p, o, g: rdf.Term) -> bool {
 }
 
 // json_id_term renders an actor or reason: null for none, else the
-// dictionary term. Replay guaranteed the id is defined.
-json_id_term :: proc(d: ^Dumper, id: u64) -> bool {
-	if id == 0 {
+// dictionary term. log_read hands nil where the log recorded none.
+json_attrib :: proc(d: ^Dumper, t: rdf.Term) -> bool {
+	if t == nil {
 		return ws(d.w, "null")
-	}
-	t, ok := resolve_term(d, id, nil)
-	if !ok {
-		return false
 	}
 	return json_term(d.w, t)
 }

@@ -211,6 +211,7 @@ open_walk :: proc(
 // silent. Removing a segment-1 husk leaves no store, and .No_Store
 // says so. Halting verdicts pass through untouched: everything that is
 // not the one recoverable position is evidence, not debris.
+@(private)
 recover :: proc(
 	dir: string,
 	ops: File_Ops,

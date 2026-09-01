@@ -1,0 +1,118 @@
+# doc/api-surface.txt -- the exported surface of package `record`.
+#
+# NORMATIVE. This file, not the compiler, states what odin-rdf-record exposes.
+# `make api` regenerates the exported set from `odin doc record -short` and
+# fails if it differs from the names below. If a change to the surface is
+# intended, change this file in the same commit; if it is not, the build has
+# caught something.
+#
+# Lines beginning with `#` and blank lines are commentary and are not compared.
+# Every other line is one exported name, sorted.
+#
+# 292 top-level declarations, 73 exported. **Every name below is API.** Typing
+# `record.` offers what a consumer should use and nothing else -- a completion
+# list is an interface, and no file the LSP does not read can fix it.
+#
+# It took three passes to get here (RECORD-I-0005, RECORD-I-0007):
+#   195 exported  -- everything not already @(private = "file"); the surface
+#                    as residue rather than decision.
+#   121           -- RECORD-T-0031 marked 74 private. The rest was stated in
+#                    three sections: 65 API, 13 held by tool/, 43 held by the
+#                    test suites.
+#    81           -- RECORD-T-0034 moved the proof, scale and tool suites INTO
+#                    the package, where @(private) reaches them, and emptied
+#                    section 3.
+#    73           -- RECORD-T-0035 gave the CLI `log_read`, the decoded
+#                    counterpart to `replay`, so it stopped reassembling the
+#                    format by hand; section 2 emptied too.
+#
+# Two things this file is NOT:
+#   - not a copy of doc/design/api.md, which is a design document written in
+#     design names (`Match`, `Iter`, `Bytes`) rather than Odin identifiers;
+#   - not the set of names consumers spell. 18 are reached only by inference --
+#     a consumer writes `r := snapshot_match(...)` and never names `Range` --
+#     and 3 are documented read verbs nothing calls yet (`snapshot_bytes`,
+#     `snapshot_visible`, `snapshot_derived`). Under-exporting is as wrong as
+#     over-exporting, and grep alone finds neither kind.
+#
+# Traversal stops at the opaque handles (`Store`, `Snapshot`, `Range`, `Scan`,
+# `Mem_FS`): they are public, their fields are internal, and the types of those
+# fields stay private. `odin doc` therefore names `Dict`, `Index_Set`, `Writer`,
+# `Env_Note` and `Mem_File` in five struct bodies without defining them. That is
+# deliberate and is the only such case.
+#
+# Recompute with:  python3 tests/api/api_surface.py closure -v
+# ---------------------------------------------------------------------------
+Apply_Error
+Apply_Error_Kind
+CONSUMER_ID_FIRST
+CONSUMER_ID_LAST
+Changeset
+Component
+Epoch
+Epoch_Meta
+Fact
+Fact_ID
+File_Handle
+File_Ops
+Filter
+Graph_Scope
+HASH_SIZE
+INLINE_LEXICAL_MAX
+LIVE_EPOCH
+Load_Error
+Log_Consumer
+MATCH_DEFAULT_GRAPH
+Mem_FS
+Mode
+Op
+Op_Kind
+Open_Error
+Order
+Origin
+Pattern
+Quad
+Range
+Read_Status
+Resident_Op
+SEGMENT_TARGET_SIZE
+Scan
+Snapshot
+Snapshot_Error
+Store
+Tear
+Tear_Kind
+Term_ID
+Term_Kind
+Validator
+Verify_Result
+Writer_Error
+apply
+log_read
+mem_file_ops
+mem_fs_destroy
+order_key
+posix_file_ops
+range_iter
+range_len
+scan_next
+snapshot_bytes
+snapshot_derived
+snapshot_epoch_meta
+snapshot_exists
+snapshot_fact
+snapshot_kind
+snapshot_match
+snapshot_match_as
+snapshot_release
+snapshot_resolve
+snapshot_term
+snapshot_term_destroy
+snapshot_terms
+snapshot_triple_parts
+snapshot_visible
+store_at
+store_close
+store_latest
+store_open
+verify

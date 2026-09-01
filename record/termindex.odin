@@ -23,6 +23,7 @@ import "core:bytes"
 // store_build_term_index sorts every dictionary id by its encoding into
 // s.terms — boot's one-time build, after replay and before publish,
 // like the permutations. Replaces whatever s.terms held.
+@(private)
 store_build_term_index :: proc(s: ^Store) {
 	n := len(s.dict.off)
 	ids := make([]Term_ID, n, s.allocator)
@@ -41,6 +42,7 @@ store_build_term_index :: proc(s: ^Store) {
 // never written or freed; it stays the published set's until that set
 // is released. The writer's step between dict_add and store_publish
 // (RECORD-T-0015).
+@(private)
 store_merge_term_index :: proc(s: ^Store, base: []Term_ID) {
 	n := len(s.dict.off)
 	assert(len(base) <= n, "store_merge_term_index: the base index is larger than the dictionary")
@@ -94,8 +96,8 @@ term_index_find :: proc(set: ^Index_Set, enc: []byte) -> (id: Term_ID, ok: bool)
 
 // Term_Key is the sort's transient record: the arena view beside the
 // id, so the sort reads no dictionary — the same trade permute.odin's
-// Perm_Rec makes, for the same reason (a sort that gathers through the
-// store is the slow half of a sort).
+// dense component columns make, for the same reason (a sort that
+// gathers through the store is the slow half of a sort).
 @(private = "file")
 Term_Key :: struct {
 	enc: []byte,
