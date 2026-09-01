@@ -166,6 +166,51 @@ their side, once that API is real.
 > bench measured the `GRAPH <g>` case at 4,122 candidates for 4,122 answers at
 > both store sizes, 0.065 ms flat, where it was 169,055 and 0.244 ms.)*
 
+> **Amended 2026-09-01 (`RECORD-I-0005`, `RECORD-I-0007`, tag `v0.7.0`).**
+> **The exported surface is a decision now, and it is 73 names where it was
+> 195.** Odin exports every top-level declaration not marked `@(private)`, so
+> what this package offered was a residue of what its code needed to share
+> with `tool/`, with the `tests/*` suites, and with itself — 65 of those 195
+> were the API, and typing `record.` listed all 195. Two mechanisms hold the
+> boundary: `@(private)` at each declaration, and `doc/api-surface.txt`, which
+> states it normatively and which `make api` diffs on every `make check`.
+>
+> The set was computed rather than grepped, and in both directions. 18 names
+> are reached only by inference and appear in no consumer's source — a
+> consumer writes `r := snapshot_match(...)` and never names `Range`. Three
+> documented read verbs (`snapshot_bytes`, `snapshot_visible`,
+> `snapshot_derived`) had to be **promoted back** after being marked private
+> for want of a caller: `api.md` §12 names *Bytes* as part of the read API, and
+> under-exporting is as wrong as over-exporting.
+>
+> `@(private)` alone could not finish, being package-scoped. 43 names were
+> exported only because a suite sat outside the package — the proof, scale and
+> tool suites are `record/*_test.odin` now, with the scale measurement behind
+> `when #config(RECORD_SCALE, false)` and a second optimized `make test` pass,
+> so it still measures the store rather than a debug harness. 13 more were
+> exported only because `tool/` reassembled the format by hand; **`log_read`**
+> is the answer — the decoded counterpart to `replay`, owning the dictionary
+> and the term resolution and handing over `rdf.Quad`s valid for the
+> callback's duration. `replay` and `Consumer` are private with it.
+>
+> Writing that loop once instead of once per caller surfaced two defects, both
+> now pinned by tests: a commit record carries its term definitions *after* the
+> header naming the attribution, so resolving at the record boundary reads an
+> id the dictionary does not yet hold; and the CLI passed no `resolve_term` to
+> `term_decode`, so **`record dump` could not read a triple term** — any log
+> written since `v0.4.0`.
+>
+> Not a format change: the log, the encoding and both verifiers are untouched,
+> and a `v0.6.0` store reads and writes identically. Both engines compile with
+> no source change, sparql's W3C survey is byte-identical and every read pin
+> holds. **This repository also has CI at last**, the family's fifth and final,
+> on ubuntu and macos — two runners and not three because it is POSIX only by
+> design — pinned to odin-rdf-parser `v0.1.2`, which is the first parser pin it
+> has ever stated. `RECORD-A-0009` decided to move the format layer into a
+> `record/log` subpackage and `RECORD-A-0010` superseded it the same day: the
+> split would have forced 38 private symbols public and taken the total
+> exported from 121 to 161.
+
 ## Future State
 
 An embedded store where:
