@@ -34,6 +34,7 @@ crc32c_table_init :: proc "contextless" () {
 // crc32c is the CRC-32C over the given chunks in order, as if they
 // were one contiguous buffer — the frame checksum covers the length
 // prefix followed by the body without concatenating them.
+@(private)
 crc32c :: proc(chunks: ..[]byte) -> u32 {
 	crc := u32(0xFFFF_FFFF)
 	for chunk in chunks {

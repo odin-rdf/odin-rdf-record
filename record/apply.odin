@@ -40,10 +40,12 @@
 // retract of one quad in one epoch is legal and yields a fact whose
 // interval [E, E) is visible at no epoch, and assert-then-assert is
 // refused at the second. A graph label is never a literal — rdf.Quad
-// makes that unrepresentable, so there is no error for it. A triple
-// term or a literal with a base direction has no encoding in the
-// frozen format and is refused, never guessed at. An empty changeset
-// is refused (decision 6). apply is not safe against itself: one
+// makes that unrepresentable, so there is no error for it. A term the
+// format has no encoding for — a base direction with no language, a
+// language tag over 255 bytes, a nil term — is refused, never guessed
+// at; triple terms are encodable since RECORD-I-0004 (format version
+// 2) and are ordinary terms here. An empty changeset is refused
+// (decision 6). apply is not safe against itself: one
 // writer, one store, one call at a time (log.md par. 10).
 package record
 

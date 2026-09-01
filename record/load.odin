@@ -51,6 +51,7 @@ Load_Error :: enum {
 // par. 5.2's self-check that no two definitions carry one encoding,
 // keyed by views into the arena (chunks never move), dropped with the
 // Loader — the store keeps no map from encoding to id (decision 2).
+@(private)
 Loader :: struct {
 	store: ^Store,
 	live:  map[Quad]Fact_ID,
@@ -64,6 +65,7 @@ Loader :: struct {
 // loader_init binds a Loader to the store it fills. The store is the
 // caller's, initialized and destroyed by the caller; the map is the
 // Loader's own and uses the store's allocator.
+@(private)
 loader_init :: proc(ld: ^Loader, s: ^Store) {
 	ld.store = s
 	ld.live = make(map[Quad]Fact_ID, s.allocator)
@@ -72,6 +74,7 @@ loader_init :: proc(ld: ^Loader, s: ^Store) {
 
 // loader_destroy drops the transient scaffolding. The store it built
 // is untouched.
+@(private)
 loader_destroy :: proc(ld: ^Loader) {
 	delete(ld.live)
 	delete(ld.seen)
@@ -81,6 +84,7 @@ loader_destroy :: proc(ld: ^Loader) {
 // loader_consumer is the seam binding: pass it to replay with the
 // Loader's store empty, then read ld.err before trusting the store —
 // a .Consumer_Abort from replay is this Loader refusing.
+@(private)
 loader_consumer :: proc(ld: ^Loader) -> Consumer {
 	return {data = ld, commit = load_commit, term = load_term, op = load_op, note = load_note}
 }

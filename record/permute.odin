@@ -68,6 +68,7 @@ order_key :: proc(o: Order) -> [4]Component {
 }
 
 // fact_component reads one position of a fact.
+@(private)
 fact_component :: proc(f: ^Fact, c: Component) -> Term_ID {
 	switch c {
 	case .S:
@@ -82,15 +83,6 @@ fact_component :: proc(f: ^Fact, c: Component) -> Term_ID {
 	unreachable()
 }
 
-// Perm_Rec is the transient sort record: one order's key materialized
-// beside the FactID, 20 bytes, no padding. Sorting FactIDs in place
-// and comparing through the fact table costs two random gathers per
-// probe — measured at 756 ms for the original six orders at ISMS scale, most
-// of the boot budget — where sorting these contiguous records is an
-// order of magnitude cheaper. Scaffolding in log.md par. 8's sense:
-// one buffer, reused across the seven sorts, freed before returning.
-// The resident form stays []FactID and nothing else (RECORD-A-0004,
-// api.md par. 5).
 // radix_pass is one stable counting pass over the 16-bit digit of each
 // element's column value at `shift`: histogram, exclusive prefix sum,
 // scatter in source order — stability is what carries the previous
@@ -146,6 +138,7 @@ radix_pass :: proc(src, dst: []Fact_ID, col: []u32, counts: []u32, shift: uint) 
 // digit's pass entirely. All of it is transient scaffolding in log.md
 // par. 8's sense, freed before returning; the resident form stays
 // []FactID and nothing else (RECORD-A-0004, api.md par. 5).
+@(private)
 store_build_permutations :: proc(s: ^Store) {
 	n := int(s.n_facts)
 	cols: [Component][]u32

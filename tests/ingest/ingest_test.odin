@@ -691,13 +691,25 @@ _:g2 { ex:carol ex:knows ex:alice . }
 	_, oerr2, _, _ := rec.store_open(&a2, RT_DIR, rec.posix_file_ops())
 	testing.expect_value(t, oerr2, rec.Open_Error.None)
 	defer rec.store_close(&a2)
+	// Compared through the published read API rather than through the
+	// resident structures: store_fact and dict_bytes are internal to the
+	// package (RECORD-T-0034), and a suite outside it should be asking the
+	// same questions a consumer can ask. snapshot_fact and snapshot_bytes
+	// answer them, and snapshot_terms is the dictionary's extent.
+	snap_b, sberr := rec.store_latest(&b)
+	testing.expect_value(t, sberr, rec.Snapshot_Error.None)
+	defer rec.snapshot_release(&snap_b)
+	snap_a, saerr := rec.store_latest(&a2)
+	testing.expect_value(t, saerr, rec.Snapshot_Error.None)
+	defer rec.snapshot_release(&snap_a)
+
 	testing.expect_value(t, b.n_facts, a2.n_facts)
-	testing.expect_value(t, len(b.dict.off), len(a2.dict.off))
+	testing.expect_value(t, rec.snapshot_terms(snap_b), rec.snapshot_terms(snap_a))
 	for id in 0 ..< min(a2.n_facts, b.n_facts) {
-		testing.expect_value(t, rec.store_fact(&b, rec.Fact_ID(id))^, rec.store_fact(&a2, rec.Fact_ID(id))^)
+		testing.expect_value(t, rec.snapshot_fact(snap_b, rec.Fact_ID(id))^, rec.snapshot_fact(snap_a, rec.Fact_ID(id))^)
 	}
-	for id in 1 ..= u32(min(len(a2.dict.off), len(b.dict.off))) {
-		testing.expect(t, string(rec.dict_bytes(&b.dict, rec.Term_ID(id))) == string(rec.dict_bytes(&a2.dict, rec.Term_ID(id))), "term bytes agree")
+	for id in 1 ..= min(rec.snapshot_terms(snap_a), rec.snapshot_terms(snap_b)) {
+		testing.expect(t, string(rec.snapshot_bytes(snap_b, rec.Term_ID(id))) == string(rec.snapshot_bytes(snap_a, rec.Term_ID(id))), "term bytes agree")
 	}
 	for op in ops {
 		testing.expect(t, exists(&b, 1, op.quad), "every ingested statement is live in the round-tripped store")

@@ -18,6 +18,7 @@ import "core:strings"
 
 // Mem_File is one file: its path as the writer named it, and its
 // bytes. Public so a caller can flush or inspect a store's files.
+@(private)
 Mem_File :: struct {
 	name: string, // cloned; owned by the Mem_FS
 	data: [dynamic]u8,

@@ -130,6 +130,7 @@ Writer_Error :: enum {
 // state the invariants of commit_encode are checked against;
 // fact_count is the fact-ID high-water mark — the id the next assert
 // receives — counted per log.md par. 5.3's positional rule.
+@(private)
 Writer :: struct {
 	ops:           File_Ops,
 	dir:           string, // cloned; owned by the writer
@@ -150,6 +151,7 @@ Writer :: struct {
 // zero base hash, synced file and directory, and an initial HEAD.
 // Resuming an existing store is writer_open. The caller owns the
 // Writer whatever err says and releases it with writer_destroy.
+@(private)
 writer_create :: proc(
 	dir: string,
 	ops: File_Ops,
@@ -187,6 +189,7 @@ writer_create :: proc(
 // seal is left sealed and the next segment is created, finishing the
 // rotation a crash interrupted, with bytes identical to the rotation's
 // own.
+@(private)
 writer_open :: proc(
 	dir: string,
 	ops: File_Ops,
@@ -233,6 +236,7 @@ writer_open :: proc(
 // open segment is a normal state for a store at rest — and frees what
 // the writer owns. IO failure here is reported but leaves nothing to
 // retry.
+@(private)
 writer_destroy :: proc(w: ^Writer) -> Writer_Error {
 	err := Writer_Error.None
 	if !w.failed && w.seg != 0 {
@@ -249,6 +253,7 @@ writer_destroy :: proc(w: ^Writer) -> Writer_Error {
 // appends it, fsyncs, and only then returns .None — log.md par. 7.1's
 // durability boundary. On .None the epoch is durable whatever happens
 // next; on any other value it is as if the call never happened.
+@(private)
 writer_commit :: proc(w: ^Writer, c: Commit) -> Writer_Error {
 	if w.failed {
 		return .Failed
@@ -279,6 +284,7 @@ writer_commit :: proc(w: ^Writer, c: Commit) -> Writer_Error {
 // writer_note appends an environment note chained from the current
 // head. The writer fills last_epoch itself — the note follows the
 // last committed epoch by construction, so the field cannot be wrong.
+@(private)
 writer_note :: proc(w: ^Writer, payload: []byte) -> Writer_Error {
 	if w.failed {
 		return .Failed
@@ -301,6 +307,7 @@ writer_note :: proc(w: ^Writer, payload: []byte) -> Writer_Error {
 // operator form of the rotation the size trigger performs, producing
 // identical bytes. The seal is a summary, not a chain link: the head
 // is unchanged, and the new segment's base hash is that head.
+@(private)
 writer_seal :: proc(w: ^Writer) -> Writer_Error {
 	if w.failed {
 		return .Failed

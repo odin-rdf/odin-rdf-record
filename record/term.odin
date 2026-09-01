@@ -26,24 +26,34 @@ import "rdf:rdf"
 // par. 3.5, and 0x07 and 0x08 for RDF 1.2's two term kinds
 // (RECORD-I-0004). 0x07 is the byte par. 11.3 reserved, in the layout
 // it specified; 0x08 had no reservation and is chosen in RECORD-A-0007.
+@(private)
 TERM_TAG_IRI :: u8(0x01)
+@(private)
 TERM_TAG_BLANK :: u8(0x02)
+@(private)
 TERM_TAG_STRING :: u8(0x03)
+@(private)
 TERM_TAG_LANG :: u8(0x04)
+@(private)
 TERM_TAG_TYPED :: u8(0x05)
+@(private)
 TERM_TAG_SPLIT_IRI :: u8(0x06)
+@(private)
 TERM_TAG_TRIPLE :: u8(0x07)
+@(private)
 TERM_TAG_DIR_LANG :: u8(0x08)
 
 // TERM_TRIPLE_PAYLOAD is a triple term's payload width: three on-disk
 // component ids, par. 11.3. Fixed, and checked exactly — a tolerated
 // tail would be a second encoding of one term, which is par. 3.2's
 // injectivity gone.
+@(private)
 TERM_TRIPLE_PAYLOAD :: 3 * 8
 
 // XSD_DATE is xsd:date, the datatype of inlined dates; the parser's
 // vocabulary carries the datatypes its grammars need and this is not
 // one of them.
+@(private)
 XSD_DATE :: rdf.IRI(rdf.XSD_NS + "date")
 
 // INLINE_LEXICAL_MAX bounds the lexical form of any inlined term:
@@ -55,6 +65,7 @@ INLINE_LEXICAL_MAX :: 16
 // callback term_decode needs for a typed literal's datatype and a
 // split IRI's namespace. It must fail (ok = false) rather than guess
 // when the id is unknown or does not name an IRI.
+@(private)
 Resolve_Iri :: proc(data: rawptr, id: u64) -> (iri: string, ok: bool)
 
 // Resolve_Term resolves a dictionary or inlined id to the term it
@@ -72,6 +83,7 @@ Resolve_Iri :: proc(data: rawptr, id: u64) -> (iri: string, ok: bool)
 // nil is a legal resolver and refuses every triple term, which is what
 // a caller holding no dictionary wants and what this codec did before
 // RECORD-I-0004.
+@(private)
 Resolve_Term :: proc(data: rawptr, id: u64, allocator: runtime.Allocator) -> (t: rdf.Term, ok: bool)
 
 // term_decode decodes one canonical term encoding into the data model.
@@ -83,6 +95,7 @@ Resolve_Term :: proc(data: rawptr, id: u64, allocator: runtime.Allocator) -> (t:
 // unknown tag, a truncated payload, a payload whose fixed width is
 // wrong, or a reference the resolver cannot answer is not ok — never a
 // guess, for the same reason an unknown record kind halts.
+@(private)
 term_decode :: proc(
 	enc: []byte,
 	resolve: Resolve_Iri,
@@ -220,6 +233,7 @@ term_decode :: proc(
 // comparison — a reference is *lower* than the id referencing it —
 // rather than any bookkeeping. Not ok on an encoding this codec cannot
 // read at all; a caller checking order has no business guessing.
+@(private)
 term_refs :: proc(enc: []byte) -> (refs: [3]u64, n: int, ok: bool) {
 	if len(enc) == 0 {
 		return refs, 0, false
@@ -261,6 +275,7 @@ term_refs :: proc(enc: []byte) -> (refs: [3]u64, n: int, ok: bool) {
 // defined, which under first-appearance numbering means strictly lower
 // than the id being defined. 0 is not a term, so it fails too. False
 // on an encoding term_refs cannot read.
+@(private)
 term_order_ok :: proc(enc: []byte, id: u64) -> bool {
 	refs, n, ok := term_refs(enc)
 	if !ok {
@@ -279,6 +294,7 @@ term_order_ok :: proc(enc: []byte, id: u64) -> bool {
 // INLINE_LEXICAL_MAX bytes) — the term borrows from it. Only ids
 // inline_ok accepts decode; everything else, the reserved tag 0
 // included, is not ok.
+@(private)
 inline_term :: proc(id: u64, buf: []byte) -> (t: rdf.Term, ok: bool) {
 	if id&INLINE_FLAG == 0 || !inline_ok(id) {
 		return nil, false

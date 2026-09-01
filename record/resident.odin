@@ -34,9 +34,13 @@ LIVE_EPOCH :: Epoch(0xFFFF_FFFF)
 // RECORD-A-0001 froze both schemes together; resident_id is the bridge.
 // Untyped, so they apply to a Term_ID and to a raw u32 alike — the
 // representation is what they describe.
+@(private)
 RES_INLINE_FLAG :: 1 << 31
+@(private)
 RES_INLINE_TAG_SHIFT :: 28
+@(private)
 RES_INLINE_PAYLOAD_MASK :: (1 << 28) - 1
+@(private)
 RES_INLINE_BIAS :: 1 << 27
 
 // CONSUMER_ID_FIRST ..= CONSUMER_ID_LAST is the range of u32 values
@@ -61,6 +65,7 @@ CONSUMER_ID_LAST :: Term_ID(0x8FFF_FFFF)
 // inlined ids outside RECORD-A-0001's frozen range (.Inline_Range) —
 // and the asserts state that precondition rather than widen the
 // contract.
+@(private)
 resident_id :: proc(id: u64) -> Term_ID {
 	if id & INLINE_FLAG == 0 {
 		assert(id < RESIDENT_ID_LIMIT, "resident_id: a dictionary id past the resident scheme")
@@ -117,8 +122,11 @@ Quad :: struct {
 
 // The fact table's chunking (api.md par. 2.3): 8192 facts per chunk,
 // 192 KB, a power of two so locating a fact is a shift and a mask.
+@(private)
 FACT_CHUNK_BITS :: 13
+@(private)
 FACT_CHUNK_SIZE :: 1 << FACT_CHUNK_BITS
+@(private)
 FACT_CHUNK_MASK :: FACT_CHUNK_SIZE - 1
 
 // Epoch_Meta is one entry per committed epoch (api.md par. 2.4): the
@@ -133,14 +141,18 @@ Epoch_Meta :: struct {
 
 // The epoch table's chunking: same discipline as the fact table, 8192
 // entries (128 KB) per chunk.
+@(private)
 EPOCH_CHUNK_BITS :: 13
+@(private)
 EPOCH_CHUNK_SIZE :: 1 << EPOCH_CHUNK_BITS
+@(private)
 EPOCH_CHUNK_MASK :: EPOCH_CHUNK_SIZE - 1
 
 // Env_Note is one environment note, keyed by the epoch it follows
 // (log.md par. 5.5), payload cloned and owned by the store. Resident
 // so that a derived fact's epoch can resolve to the note in effect at
 // the time (api.md par. 12.6) — a few hundred entries at most.
+@(private)
 Env_Note :: struct {
 	last_epoch: Epoch,
 	payload:    []byte,
@@ -152,9 +164,13 @@ Env_Note :: struct {
 // chunks and 4 GB of term bytes, three orders of magnitude over the
 // ~5 MB design scale. An encoding larger than a chunk gets a dedicated
 // chunk of its exact size at offset 0, so no term ever spans two.
+@(private)
 DICT_CHUNK_BITS :: 20
+@(private)
 DICT_CHUNK_SIZE :: 1 << DICT_CHUNK_BITS
+@(private)
 DICT_CHUNK_MASK :: u32(DICT_CHUNK_SIZE - 1)
+@(private)
 DICT_MAX_CHUNKS :: 1 << (32 - DICT_CHUNK_BITS)
 
 // Dict is the dictionary arena (api.md par. 4): every term's canonical
@@ -169,6 +185,7 @@ DICT_MAX_CHUNKS :: 1 << (32 - DICT_CHUNK_BITS)
 // map, so nothing here is both mutated by the writer and probed by a
 // reader. The arena's own lists — chunks, used, off — are the writer's;
 // a reader holds the copies its set took at publication.
+@(private)
 Dict :: struct {
 	chunks: [dynamic][]byte,
 	used:   [dynamic]u32, // bytes filled in each chunk; final once a chunk is left
@@ -205,6 +222,7 @@ Store :: struct {
 // store_init readies an empty store. Everything the store allocates —
 // chunks, note payloads, the map — comes from this allocator and is
 // returned by store_destroy.
+@(private)
 store_init :: proc(s: ^Store, allocator := context.allocator) {
 	s.allocator = allocator
 	s.facts = make([dynamic][]Fact, allocator)
@@ -223,6 +241,7 @@ store_init :: proc(s: ^Store, allocator := context.allocator) {
 // close assertion making a leaked snapshot loud. A store opened by
 // store_open is closed with store_close, which releases the writer
 // too; this alone is for a projection built without one.
+@(private)
 store_destroy :: proc(s: ^Store) {
 	if s.idx != nil {
 		assert(s.idx.refs == 1, "store_destroy: a snapshot is still holding the published set")
@@ -260,6 +279,7 @@ store_destroy :: proc(s: ^Store) {
 // store's own chunk list, which the writer grows. A reader goes
 // through its snapshot (snapshot_fact), whose set holds the list as
 // it stood at publication.
+@(private)
 store_fact :: proc(s: ^Store, id: Fact_ID) -> ^Fact {
 	assert(u32(id) < s.n_facts, "store_fact: a fact id past the table")
 	return fact_in(s.facts[:], id)
@@ -276,6 +296,7 @@ fact_in :: proc(chunks: [][]Fact, id: Fact_ID) -> ^Fact {
 // (api.md par. 2.2): true if the fact was inferred rather than
 // recorded — the distinction architecture.md A.5 requires an auditor
 // to always see.
+@(private)
 store_derived :: proc(s: ^Store, id: Fact_ID) -> bool {
 	assert(u32(id) < s.n_facts, "store_derived: a fact id past the table")
 	return s.derived[id >> 6] & (u64(1) << (id & 63)) != 0
@@ -284,6 +305,7 @@ store_derived :: proc(s: ^Store, id: Fact_ID) -> bool {
 // store_epoch_meta returns the wall/actor/reason of one committed
 // epoch (api.md par. 2.4). Epochs are contiguous from 1, so the table
 // is dense and the epoch number is the index.
+@(private)
 store_epoch_meta :: proc(s: ^Store, epoch: Epoch) -> Epoch_Meta {
 	assert(epoch >= 1 && u32(epoch) <= s.n_epochs, "store_epoch_meta: an epoch never committed")
 	i := epoch - 1
@@ -296,6 +318,7 @@ store_epoch_meta :: proc(s: ^Store, epoch: Epoch) -> Epoch_Meta {
 // store. Notes arrive in log order with non-decreasing last_epoch, so
 // this is one binary search; of several notes at the same boundary the
 // latest wins, being the one in effect.
+@(private)
 store_note_at :: proc(s: ^Store, epoch: Epoch) -> (payload: []byte, ok: bool) {
 	lo, hi := 0, len(s.notes)
 	for lo < hi {
@@ -319,6 +342,7 @@ store_note_at :: proc(s: ^Store, epoch: Epoch) -> (payload: []byte, ok: bool) {
 // the moment a chunk stops being the last. The writer's accessor over
 // the store's own lists; a reader's is snapshot_bytes, over its set's
 // copies, with the set's n_terms as the bound.
+@(private)
 dict_bytes :: proc(d: ^Dict, id: Term_ID) -> []byte {
 	return dict_bytes_in(d.chunks[:], d.used[:], d.off[:], u32(len(d.off)), id)
 }

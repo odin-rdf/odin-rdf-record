@@ -1,4 +1,4 @@
-package scale_test
+package record
 
 import "core:fmt"
 import "core:log"
@@ -8,7 +8,6 @@ import "core:strings"
 import "core:testing"
 import "core:time"
 
-import rec "../../record"
 import "rdf:rdf"
 
 // The scale measurement (RECORD-T-0006): a synthetic ISMS-shaped log —
@@ -34,9 +33,13 @@ import "rdf:rdf"
 // criterion, and the resident footprint measured against api.md
 // par. 10's budget, in both epoch shapes.
 
+@(private = "file")
 OPS_TOTAL :: 400_000
+@(private = "file")
 TERMS_TARGET :: 100_000
+@(private = "file")
 SEED :: u64(0xDA7A_5EED_0D1B_57EF)
+@(private = "file")
 WALL :: u64(1_700_000_000_000_000_000)
 
 // splitmix64 — hand-rolled so the corpus is identical across Odin
@@ -51,7 +54,7 @@ splitmix :: proc(s: ^u64) -> u64 {
 }
 
 @(private = "file")
-Quad :: struct {
+Gen_Quad :: struct {
 	s, p, o, g: u64,
 }
 
@@ -67,15 +70,15 @@ Gen :: struct {
 	rng:       u64,
 	next_term: u64,
 	date_dt:   u64, // the xsd:date IRI's id, defined first (par. 5.2 ordering)
-	live:      [dynamic]Quad,
-	live_set:  map[Quad]bool, // the same quads, for the duplicate-assert check
+	live:      [dynamic]Gen_Quad,
+	live_set:  map[Gen_Quad]bool, // the same quads, for the duplicate-assert check
 	enc_ids:   map[string]u64, // encoding -> id: the generator interns, as a real writer does (par. 5.2)
 	iris:      [dynamic]u64, // term ids usable as S and G
 	objects:   [dynamic]u64, // term ids usable as O
 	preds:     [dynamic]u64, // a small predicate pool, ISMS-shaped
 	// per-commit accumulators
-	terms:     [dynamic]rec.Term_Def,
-	ops:       [dynamic]rec.Fact_Op,
+	terms:     [dynamic]Term_Def,
+	ops:       [dynamic]Fact_Op,
 	// every encoding of the run, owned here: enc_ids' keys and the
 	// pending Term_Defs view these, so they are freed once at the end
 	arena:     [dynamic]string,
@@ -98,7 +101,7 @@ gen_new_term :: proc(g: ^Gen, enc: string) -> u64 {
 	g.next_term += 1
 	append(&g.arena, enc)
 	g.enc_ids[enc] = id
-	append(&g.terms, rec.Term_Def{id = id, enc = transmute([]u8)enc})
+	append(&g.terms, Term_Def{id = id, enc = transmute([]u8)enc})
 	return id
 }
 
@@ -162,7 +165,7 @@ gen_object :: proc(g: ^Gen) -> u64 {
 	case 85 ..< 88: // a new typed date
 		return gen_typed_date(g)
 	case: // an inlined integer
-		id, _ := rec.inline_integer(i64(splitmix(&g.rng) % 100_000))
+		id, _ := inline_integer(i64(splitmix(&g.rng) % 100_000))
 		return id
 	}
 }
@@ -172,8 +175,8 @@ gen_object :: proc(g: ^Gen) -> u64 {
 // the writer's end state for the replay cross-check.
 @(private = "file")
 gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_epoch: u64, terms: u64, sizes: int, live: int) {
-	fs: rec.Mem_FS
-	defer rec.mem_fs_destroy(&fs)
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
 	g: Gen
 	g.rng = seed
 	g.next_term = 1
@@ -192,9 +195,9 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 		delete(g.arena)
 	}
 
-	w, err := rec.writer_create(dir, rec.mem_file_ops(&fs))
-	defer rec.writer_destroy(&w)
-	testing.expect_value(t, err, rec.Writer_Error.None)
+	w, err := writer_create(dir, mem_file_ops(&fs))
+	defer writer_destroy(&w)
+	testing.expect_value(t, err, Writer_Error.None)
 
 	ops_per_epoch := OPS_TOTAL / epochs
 	for e in 1 ..= epochs {
@@ -219,7 +222,7 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 				q := g.live[i]
 				unordered_remove(&g.live, int(i))
 				delete_key(&g.live_set, q)
-				append(&g.ops, rec.Fact_Op{op = .Retract, s = q.s, p = q.p, o = q.o, g = q.g})
+				append(&g.ops, Fact_Op{op = .Retract, s = q.s, p = q.p, o = q.o, g = q.g})
 			} else {
 				s := g.iris[splitmix(&g.rng)%u64(len(g.iris))]
 				if splitmix(&g.rng)%100 < 5 {
@@ -227,7 +230,7 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 				}
 				p := g.preds[splitmix(&g.rng)%u64(len(g.preds))]
 				o := gen_object(&g)
-				gr := rec.DEFAULT_GRAPH
+				gr := DEFAULT_GRAPH
 				if splitmix(&g.rng)%100 < 30 {
 					gr = g.iris[splitmix(&g.rng)%u64(len(g.iris))]
 				}
@@ -235,7 +238,7 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 				// collide with a live quad; re-roll the object until it
 				// does not. Rare enough that the corpus is unchanged in
 				// shape, and it keeps the log a set (par. 5.3).
-				q := Quad{s, p, o, gr}
+				q := Gen_Quad{s, p, o, gr}
 				for {
 					if !(q in g.live_set) {
 						break
@@ -244,11 +247,11 @@ gen_store :: proc(t: ^testing.T, dir: string, epochs: int, seed: u64) -> (last_e
 				}
 				g.live_set[q] = true
 				append(&g.live, q)
-				append(&g.ops, rec.Fact_Op{op = .Assert, s = q.s, p = q.p, o = q.o, g = q.g})
+				append(&g.ops, Fact_Op{op = .Assert, s = q.s, p = q.p, o = q.o, g = q.g})
 			}
 		}
-		werr := rec.writer_commit(&w, {epoch = u64(e), wall = WALL + u64(e), terms = g.terms[:], ops = g.ops[:]})
-		testing.expect_value(t, werr, rec.Writer_Error.None)
+		werr := writer_commit(&w, {epoch = u64(e), wall = WALL + u64(e), terms = g.terms[:], ops = g.ops[:]})
+		testing.expect_value(t, werr, Writer_Error.None)
 	}
 	last_epoch = w.prev_epoch
 	terms = w.next_term_id - 1
@@ -274,7 +277,7 @@ Counter :: struct {
 }
 
 @(private = "file")
-counting_consumer :: proc(c: ^Counter) -> rec.Consumer {
+counting_consumer :: proc(c: ^Counter) -> Consumer {
 	return {
 		data = c,
 		commit = proc(data: rawptr, epoch, wall, actor, reason: u64) -> bool {
@@ -285,7 +288,7 @@ counting_consumer :: proc(c: ^Counter) -> rec.Consumer {
 			(^Counter)(data).terms += 1
 			return true
 		},
-		op = proc(data: rawptr, epoch: u64, op: rec.Fact_Op) -> bool {
+		op = proc(data: rawptr, epoch: u64, op: Fact_Op) -> bool {
 			(^Counter)(data).ops += 1
 			return true
 		},
@@ -303,18 +306,18 @@ measure :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	testing.expect(t, terms > 60_000 && terms < 170_000, "the term count is ISMS-shaped")
 
 	start := time.tick_now()
-	r, tear, verr := rec.verify(dir, rec.posix_file_ops())
+	r, tear, verr := verify(dir, posix_file_ops())
 	verify_ms := time.duration_milliseconds(time.tick_since(start))
-	testing.expect_value(t, verr, rec.Open_Error.None)
-	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
+	testing.expect_value(t, verr, Open_Error.None)
+	testing.expect_value(t, tear.kind, Tear_Kind.None)
 	testing.expect_value(t, r.last_epoch, u64(epochs))
 	testing.expect_value(t, r.next_term_id, terms+1)
 
 	c: Counter
 	start = time.tick_now()
-	r2, _, rerr := rec.replay(dir, rec.posix_file_ops(), counting_consumer(&c))
+	r2, _, rerr := replay(dir, posix_file_ops(), counting_consumer(&c))
 	replay_ms := time.duration_milliseconds(time.tick_since(start))
-	testing.expect_value(t, rerr, rec.Open_Error.None)
+	testing.expect_value(t, rerr, Open_Error.None)
 	testing.expect_value(t, c.commits, u64(epochs))
 	testing.expect_value(t, c.ops, u64(OPS_TOTAL))
 	testing.expect_value(t, c.terms, terms)
@@ -340,36 +343,36 @@ measure :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 @(private = "file")
 Mirror :: struct {
 	t:    ^testing.T,
-	s:    ^rec.Store,
-	live: map[rec.Quad]u32,
+	s:    ^Store,
+	live: map[Quad]u32,
 	n:    u32, // asserts seen — the fact id the next assert must land on
 }
 
 @(private = "file")
-mirror_consumer :: proc(m: ^Mirror) -> rec.Consumer {
+mirror_consumer :: proc(m: ^Mirror) -> Consumer {
 	return {
 		data = m,
 		term = proc(data: rawptr, id: u64, enc: []byte) -> bool {
 			m := (^Mirror)(data)
-			got := rec.dict_bytes(&m.s.dict, rec.resident_id(id))
+			got := dict_bytes(&m.s.dict, resident_id(id))
 			ok := string(got) == string(enc)
 			testing.expect(m.t, ok, "the arena holds the log's encoding verbatim")
 			return ok
 		},
-		op = proc(data: rawptr, epoch: u64, op: rec.Fact_Op) -> bool {
+		op = proc(data: rawptr, epoch: u64, op: Fact_Op) -> bool {
 			m := (^Mirror)(data)
-			q := rec.Quad{rec.resident_id(op.s), rec.resident_id(op.p), rec.resident_id(op.o), rec.resident_id(op.g)}
+			q := Quad{resident_id(op.s), resident_id(op.p), resident_id(op.o), resident_id(op.g)}
 			ok: bool
 			switch op.op {
 			case .Assert, .Assert_Derived:
-				f := rec.store_fact(m.s, rec.Fact_ID(m.n))^
-				ok = f.s == q.s && f.p == q.p && f.o == q.o && f.g == q.g && f.assert == rec.Epoch(epoch)
+				f := store_fact(m.s, Fact_ID(m.n))^
+				ok = f.s == q.s && f.p == q.p && f.o == q.o && f.g == q.g && f.assert == Epoch(epoch)
 				testing.expect(m.t, ok, "an assert lands at its positional fact id")
 				m.live[q] = m.n
 				m.n += 1
 			case .Retract, .Retract_Derived:
 				id, was_live := m.live[q]
-				ok = was_live && rec.store_fact(m.s, rec.Fact_ID(id)).retract == rec.Epoch(epoch)
+				ok = was_live && store_fact(m.s, Fact_ID(id)).retract == Epoch(epoch)
 				testing.expect(m.t, ok, "a retract resolved to the live generation")
 				delete_key(&m.live, q)
 			}
@@ -378,21 +381,26 @@ mirror_consumer :: proc(m: ^Mirror) -> rec.Consumer {
 	}
 }
 
+// Guarded: the scale measurement is meaningless in a debug build and
+// asserts against wall-clock budgets. `make test` compiles it in a
+// second, optimized pass -- see the Makefile (RECORD-T-0034).
+when #config(RECORD_SCALE, false) {
+
 @(test)
 test_scale_resident_build :: proc(t: ^testing.T) {
 	dir :: "build/scale/resident"
 	last_epoch, terms, _, live := gen_store(t, dir, 1_000, SEED)
 
-	s: rec.Store
-	rec.store_init(&s)
-	defer rec.store_destroy(&s)
-	ld: rec.Loader
-	rec.loader_init(&ld, &s)
-	defer rec.loader_destroy(&ld)
-	r, tear, err := rec.replay(dir, rec.posix_file_ops(), rec.loader_consumer(&ld))
-	testing.expect_value(t, err, rec.Open_Error.None)
-	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
-	testing.expect_value(t, ld.err, rec.Load_Error.None)
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	ld: Loader
+	loader_init(&ld, &s)
+	defer loader_destroy(&ld)
+	r, tear, err := replay(dir, posix_file_ops(), loader_consumer(&ld))
+	testing.expect_value(t, err, Open_Error.None)
+	testing.expect_value(t, tear.kind, Tear_Kind.None)
+	testing.expect_value(t, ld.err, Load_Error.None)
 
 	// Counts against the verified walk and the generator's own state.
 	testing.expect_value(t, s.n_facts, r.fact_count)
@@ -401,7 +409,7 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(ld.live), live)
 	n_live: int
 	for id in u32(0) ..< s.n_facts {
-		if rec.store_fact(&s, rec.Fact_ID(id)).retract == rec.LIVE_EPOCH {
+		if store_fact(&s, Fact_ID(id)).retract == LIVE_EPOCH {
 			n_live += 1
 		}
 	}
@@ -411,8 +419,8 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	// ops one for one, terms byte-for-byte.
 	m := Mirror{t = t, s = &s}
 	defer delete(m.live)
-	_, _, merr := rec.replay(dir, rec.posix_file_ops(), mirror_consumer(&m))
-	testing.expect_value(t, merr, rec.Open_Error.None)
+	_, _, merr := replay(dir, posix_file_ops(), mirror_consumer(&m))
+	testing.expect_value(t, merr, Open_Error.None)
 	testing.expect_value(t, m.n, s.n_facts)
 	testing.expect_value(t, len(m.live), live)
 
@@ -421,19 +429,19 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	// the build timed informally — the formal boot measurement is
 	// RECORD-T-0012's.
 	start := time.tick_now()
-	rec.store_build_permutations(&s)
+	store_build_permutations(&s)
 	sort_ms := time.duration_milliseconds(time.tick_since(start))
-	for o in rec.Order {
+	for o in Order {
 		ids := s.ord[o]
 		testing.expect_value(t, u32(len(ids)), s.n_facts)
-		key := rec.order_key(o)
+		key := order_key(o)
 		for i in 1 ..< len(ids) {
-			fa := rec.store_fact(&s, ids[i-1])
-			fb := rec.store_fact(&s, ids[i])
+			fa := store_fact(&s, ids[i-1])
+			fb := store_fact(&s, ids[i])
 			ordered := false
 			for c in key {
-				va := rec.fact_component(fa, c)
-				vb := rec.fact_component(fb, c)
+				va := fact_component(fa, c)
+				vb := fact_component(fb, c)
 				if va != vb {
 					ordered = va < vb
 					break
@@ -446,49 +454,51 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 			}
 		}
 	}
-	log.infof("permutations: %d orders over %d facts sorted in %.0f ms", len(rec.Order), s.n_facts, sort_ms)
+	log.infof("permutations: %d orders over %d facts sorted in %.0f ms", len(Order), s.n_facts, sort_ms)
 
 	// The read API at scale (RECORD-T-0010): publish, then sampled
 	// patterns — components lifted from real facts across the table —
 	// at the head and at a mid-history epoch, each checked against a
 	// brute-force scan of the whole fact table.
-	rec.store_build_term_index(&s)
-	rec.store_publish(&s)
-	for epoch in ([2]rec.Epoch{s.published, s.published / 2}) {
-		snap, serr := rec.store_at(&s, epoch)
-		testing.expect_value(t, serr, rec.Snapshot_Error.None)
+	store_build_term_index(&s)
+	store_publish(&s)
+	for epoch in ([2]Epoch{s.published, s.published / 2}) {
+		snap, serr := store_at(&s, epoch)
+		testing.expect_value(t, serr, Snapshot_Error.None)
 		for probe in 0 ..< 4 {
-			f := rec.store_fact(&s, rec.Fact_ID(u32(probe) * (s.n_facts / 4)))
-			pats := [4]rec.Pattern{
+			f := store_fact(&s, Fact_ID(u32(probe) * (s.n_facts / 4)))
+			pats := [4]Pattern{
 				{s = f.s},
 				{p = f.p},
 				{s = f.s, p = f.p, o = f.o},
-				{p = f.p, g = f.g if f.g != 0 else rec.MATCH_DEFAULT_GRAPH},
+				{p = f.p, g = f.g if f.g != 0 else MATCH_DEFAULT_GRAPH},
 			}
 			for p in pats {
 				want := 0
 				for id in u32(0) ..< s.n_facts {
-					c := rec.store_fact(&s, rec.Fact_ID(id))
+					c := store_fact(&s, Fact_ID(id))
 					if p.s != 0 && c.s != p.s do continue
 					if p.p != 0 && c.p != p.p do continue
 					if p.o != 0 && c.o != p.o do continue
 					if p.g != 0 {
-						pg := rec.Term_ID(0) if p.g == rec.MATCH_DEFAULT_GRAPH else p.g
+						pg := Term_ID(0) if p.g == MATCH_DEFAULT_GRAPH else p.g
 						if c.g != pg do continue
 					}
 					if !(c.assert <= epoch && epoch < c.retract) do continue
 					want += 1
 				}
 				got := 0
-				sc := rec.range_iter(rec.snapshot_match(snap, p), {origin = .Any, scope = .All})
-				for _ in rec.scan_next(&sc) {
+				sc := range_iter(snapshot_match(snap, p), {origin = .Any, scope = .All})
+				for _ in scan_next(&sc) {
 					got += 1
 				}
 				testing.expectf(t, got == want, "pattern %v at epoch %d: got %d, want %d", p, epoch, got, want)
 			}
 		}
-		rec.snapshot_release(&snap)
+		snapshot_release(&snap)
 	}
+}
+
 }
 
 // measure_boot is RECORD-T-0012's gate: store_open end to end on a
@@ -503,17 +513,17 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 @(private = "file")
 measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	last_epoch, terms, _, live := gen_store(t, dir, epochs, SEED)
-	ops := rec.posix_file_ops()
+	ops := posix_file_ops()
 
 	// Settle the environment note, so the measured boot is a wake, not
 	// a first run.
 	{
-		s: rec.Store
-		_, err, lerr, werr := rec.store_open(&s, dir, ops)
-		testing.expect_value(t, err, rec.Open_Error.None)
-		testing.expect_value(t, lerr, rec.Load_Error.None)
-		testing.expect_value(t, werr, rec.Writer_Error.None)
-		rec.store_close(&s)
+		s: Store
+		_, err, lerr, werr := store_open(&s, dir, ops)
+		testing.expect_value(t, err, Open_Error.None)
+		testing.expect_value(t, lerr, Load_Error.None)
+		testing.expect_value(t, werr, Writer_Error.None)
+		store_close(&s)
 	}
 
 	// The measured boot.
@@ -522,42 +532,42 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	defer mem.tracking_allocator_destroy(&track)
 	alloc := mem.tracking_allocator(&track)
 
-	s: rec.Store
+	s: Store
 	start := time.tick_now()
-	tear, err, lerr, werr := rec.store_open(&s, dir, ops, allocator = alloc)
+	tear, err, lerr, werr := store_open(&s, dir, ops, allocator = alloc)
 	boot_ms := time.duration_milliseconds(time.tick_since(start))
-	testing.expect_value(t, err, rec.Open_Error.None)
-	testing.expect_value(t, lerr, rec.Load_Error.None)
-	testing.expect_value(t, werr, rec.Writer_Error.None)
-	testing.expect_value(t, tear.kind, rec.Tear_Kind.None)
+	testing.expect_value(t, err, Open_Error.None)
+	testing.expect_value(t, lerr, Load_Error.None)
+	testing.expect_value(t, werr, Writer_Error.None)
+	testing.expect_value(t, tear.kind, Tear_Kind.None)
 	testing.expect_value(t, u64(s.published), last_epoch)
 	testing.expect_value(t, u64(len(s.dict.off)), terms)
 
 	// Read-path sanity on the booted store (the full oracle is
 	// test_scale_resident_build's): the head's live count through
 	// Match, against the generator's own live set.
-	snap, serr := rec.store_latest(&s)
-	testing.expect_value(t, serr, rec.Snapshot_Error.None)
+	snap, serr := store_latest(&s)
+	testing.expect_value(t, serr, Snapshot_Error.None)
 	n_live := 0
-	sc := rec.range_iter(rec.snapshot_match(snap, {}), {origin = .Any, scope = .All})
-	for _ in rec.scan_next(&sc) {
+	sc := range_iter(snapshot_match(snap, {}), {origin = .Any, scope = .All})
+	for _ in scan_next(&sc) {
 		n_live += 1
 	}
 	testing.expect_value(t, n_live, live)
-	rec.snapshot_release(&snap)
+	snapshot_release(&snap)
 
 	// The resident footprint, by structure (bytes actually allocated),
 	// with small slack as the tracker's remainder. The set's copies are
 	// the term index and the offsets (4 bytes per term each) plus the
 	// chunk lists, which are headers.
-	fact_b := len(s.facts) * rec.FACT_CHUNK_SIZE * size_of(rec.Fact)
+	fact_b := len(s.facts) * FACT_CHUNK_SIZE * size_of(Fact)
 	perm_b := 0
-	for o in rec.Order {
+	for o in Order {
 		perm_b += len(s.idx.ord[o]) * size_of(u32)
 	}
 	set_b := len(s.idx.terms)*size_of(u32) + len(s.idx.off)*size_of(u32) + len(s.idx.used)*size_of(u32)
-	set_b += len(s.idx.facts)*size_of([]rec.Fact) + len(s.idx.dict)*size_of([]byte) + len(s.idx.epochs)*size_of([]rec.Epoch_Meta)
-	epoch_b := len(s.epochs) * rec.EPOCH_CHUNK_SIZE * size_of(rec.Epoch_Meta)
+	set_b += len(s.idx.facts)*size_of([]Fact) + len(s.idx.dict)*size_of([]byte) + len(s.idx.epochs)*size_of([]Epoch_Meta)
+	epoch_b := len(s.epochs) * EPOCH_CHUNK_SIZE * size_of(Epoch_Meta)
 	arena_b := 0
 	for c in s.dict.chunks {
 		arena_b += len(c)
@@ -577,51 +587,79 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	testing.expect(t, boot_ms < 1000, "full boot stays under a second")
 	testing.expect(t, resident > accounted, "the walked structures are within what the tracker saw")
 
-	rec.store_close(&s)
+	store_close(&s)
 
 	// The phase breakdown, over the same store: recover + replay-into-
 	// the-build versus the permutation sort — the same decomposition
 	// store_open runs, timed at its two seams.
-	s2: rec.Store
-	rec.store_init(&s2)
-	defer rec.store_destroy(&s2)
+	s2: Store
+	store_init(&s2)
+	defer store_destroy(&s2)
 	start = time.tick_now()
-	_, _, rerr := rec.recover(dir, ops)
-	testing.expect_value(t, rerr, rec.Open_Error.None)
-	ld: rec.Loader
-	rec.loader_init(&ld, &s2)
-	_, _, perr := rec.replay(dir, ops, rec.loader_consumer(&ld))
-	testing.expect_value(t, perr, rec.Open_Error.None)
-	rec.loader_destroy(&ld)
+	_, _, rerr := recover(dir, ops)
+	testing.expect_value(t, rerr, Open_Error.None)
+	ld: Loader
+	loader_init(&ld, &s2)
+	_, _, perr := replay(dir, ops, loader_consumer(&ld))
+	testing.expect_value(t, perr, Open_Error.None)
+	loader_destroy(&ld)
 	load_ms := time.duration_milliseconds(time.tick_since(start))
 	start = time.tick_now()
-	rec.store_build_permutations(&s2)
+	store_build_permutations(&s2)
 	sort_ms := time.duration_milliseconds(time.tick_since(start))
 	start = time.tick_now()
-	rec.store_build_term_index(&s2)
+	store_build_term_index(&s2)
 	index_ms := time.duration_milliseconds(time.tick_since(start))
-	rec.store_publish(&s2)
+	store_publish(&s2)
 	log.infof("%s boot phases: recover+replay+build %.0f ms, permutation sort %.0f ms, term index %.0f ms", name, load_ms, sort_ms, index_ms)
 }
+
+// Guarded: the scale measurement is meaningless in a debug build and
+// asserts against wall-clock budgets. `make test` compiles it in a
+// second, optimized pass -- see the Makefile (RECORD-T-0034).
+when #config(RECORD_SCALE, false) {
 
 @(test)
 test_scale_boot_bulk :: proc(t: ^testing.T) {
 	measure_boot(t, "bulk-loaded", "build/scale/boot-bulk", 1_000)
 }
 
+}
+
+// Guarded: the scale measurement is meaningless in a debug build and
+// asserts against wall-clock budgets. `make test` compiles it in a
+// second, optimized pass -- see the Makefile (RECORD-T-0034).
+when #config(RECORD_SCALE, false) {
+
 @(test)
 test_scale_boot_edited :: proc(t: ^testing.T) {
 	measure_boot(t, "hand-edited", "build/scale/boot-edited", 200_000)
 }
+
+}
+
+// Guarded: the scale measurement is meaningless in a debug build and
+// asserts against wall-clock budgets. `make test` compiles it in a
+// second, optimized pass -- see the Makefile (RECORD-T-0034).
+when #config(RECORD_SCALE, false) {
 
 @(test)
 test_scale_bulk_loaded :: proc(t: ^testing.T) {
 	measure(t, "bulk-loaded", "build/scale/bulk", 1_000)
 }
 
+}
+
+// Guarded: the scale measurement is meaningless in a debug build and
+// asserts against wall-clock budgets. `make test` compiles it in a
+// second, optimized pass -- see the Makefile (RECORD-T-0034).
+when #config(RECORD_SCALE, false) {
+
 @(test)
 test_scale_hand_edited :: proc(t: ^testing.T) {
 	measure(t, "hand-edited", "build/scale/edited", 200_000)
+}
+
 }
 
 // --- the write path at scale (RECORD-T-0015, RECORD-T-0018) --------------
@@ -637,7 +675,7 @@ Bulk :: struct {
 	preds:    []rdf.Term,
 	objects:  []rdf.Term,
 	graphs:   []rdf.Graph_Label,
-	ops:      [dynamic]rec.Op,
+	ops:      [dynamic]Op,
 	rng:      u64,
 }
 
@@ -679,7 +717,7 @@ bulk_make :: proc() -> (b: Bulk) {
 			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("Control objective %d", i)), datatype = rdf.RDF_LANG_STRING, language = "en"}
 		case 3:
 			// Twelve 28-day months: distinct per i, and always a valid date.
-			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("%04d-%02d-%02d", 2000 + i/336, 1 + (i%336)/28, 1 + i%28)), datatype = rec.XSD_DATE}
+			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("%04d-%02d-%02d", 2000 + i/336, 1 + (i%336)/28, 1 + i%28)), datatype = XSD_DATE}
 		case 4:
 			o = rdf.Literal{lexical = own(&b.owned, fmt.aprintf("%d", i*13)), datatype = rdf.XSD_INTEGER}
 		case 5:
@@ -688,7 +726,7 @@ bulk_make :: proc() -> (b: Bulk) {
 	}
 	seen := make(map[Key]bool)
 	defer delete(seen)
-	b.ops = make([dynamic]rec.Op, 0, OPS_TOTAL)
+	b.ops = make([dynamic]Op, 0, OPS_TOTAL)
 	for len(b.ops) < OPS_TOTAL {
 		k := Key{
 			u32(splitmix(&b.rng) % N_SUBJECTS),
@@ -700,7 +738,7 @@ bulk_make :: proc() -> (b: Bulk) {
 			continue
 		}
 		seen[k] = true
-		append(&b.ops, rec.Op{kind = .Assert, quad = {triple = {b.subjects[k.s], b.preds[k.p], b.objects[k.o]}, graph = b.graphs[k.g]}})
+		append(&b.ops, Op{kind = .Assert, quad = {triple = {b.subjects[k.s], b.preds[k.p], b.objects[k.o]}, graph = b.graphs[k.g]}})
 	}
 	return
 }
@@ -723,32 +761,39 @@ bulk_destroy :: proc(b: ^Bulk) {
 // one fsync, the shape log.md par. 7.1 gives bulk import — through
 // apply on the in-memory file seam. Timed for the record; gated only on
 // succeeding in one epoch with every op a fact.
+// Guarded: the scale measurement is meaningless in a debug build and
+// asserts against wall-clock budgets. `make test` compiles it in a
+// second, optimized pass -- see the Makefile (RECORD-T-0034).
+when #config(RECORD_SCALE, false) {
+
 @(test)
 test_scale_bulk_apply :: proc(t: ^testing.T) {
-	fs: rec.Mem_FS
-	defer rec.mem_fs_destroy(&fs)
-	s: rec.Store
-	_, err, lerr, werr := rec.store_open(&s, "bulk", rec.mem_file_ops(&fs))
-	testing.expect_value(t, err, rec.Open_Error.None)
-	testing.expect_value(t, lerr, rec.Load_Error.None)
-	testing.expect_value(t, werr, rec.Writer_Error.None)
-	defer rec.store_close(&s)
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
+	s: Store
+	_, err, lerr, werr := store_open(&s, "bulk", mem_file_ops(&fs))
+	testing.expect_value(t, err, Open_Error.None)
+	testing.expect_value(t, lerr, Load_Error.None)
+	testing.expect_value(t, werr, Writer_Error.None)
+	defer store_close(&s)
 	b := bulk_make()
 	defer bulk_destroy(&b)
 
 	start := time.tick_now()
-	epoch, _, aerr := rec.apply(&s, {ops = b.ops[:], actor = rdf.IRI("http://example.org/isms/importer")})
+	epoch, _, aerr := apply(&s, {ops = b.ops[:], actor = rdf.IRI("http://example.org/isms/importer")})
 	apply_ms := time.duration_milliseconds(time.tick_since(start))
-	testing.expect_value(t, aerr, rec.Apply_Error{})
-	testing.expect_value(t, epoch, rec.Epoch(1))
+	testing.expect_value(t, aerr, Apply_Error{})
+	testing.expect_value(t, epoch, Epoch(1))
 	testing.expect_value(t, s.n_facts, u32(OPS_TOTAL))
-	testing.expect_value(t, s.published, rec.Epoch(1))
+	testing.expect_value(t, s.published, Epoch(1))
 	bytes := 0
 	for f in fs.files {
 		bytes += len(f.data)
 	}
 	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
 	log.infof("bulk apply: %d ops, %d terms, %.1f MB log — one epoch in %.0f ms", OPS_TOTAL, len(s.dict.off), mb(bytes), apply_ms)
+}
+
 }
 
 // test_scale_commit_latency is RECORD-T-0018's number: the cost of one
@@ -764,6 +809,11 @@ test_scale_bulk_apply :: proc(t: ^testing.T) {
 // the allocator's peak over the commits is the transient cost of one
 // rebuild. Not run as 2×10⁵ commits: at ~50 ms each that is hours, and
 // the number is per commit, not per corpus.
+// Guarded: the scale measurement is meaningless in a debug build and
+// asserts against wall-clock budgets. `make test` compiles it in a
+// second, optimized pass -- see the Makefile (RECORD-T-0034).
+when #config(RECORD_SCALE, false) {
+
 @(test)
 test_scale_commit_latency :: proc(t: ^testing.T) {
 	track: mem.Tracking_Allocator
@@ -771,21 +821,21 @@ test_scale_commit_latency :: proc(t: ^testing.T) {
 	defer mem.tracking_allocator_destroy(&track)
 	alloc := mem.tracking_allocator(&track)
 
-	fs: rec.Mem_FS
-	defer rec.mem_fs_destroy(&fs)
-	s: rec.Store
-	_, err, _, _ := rec.store_open(&s, "latency", rec.mem_file_ops(&fs), allocator = alloc)
-	testing.expect_value(t, err, rec.Open_Error.None)
-	defer rec.store_close(&s)
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
+	s: Store
+	_, err, _, _ := store_open(&s, "latency", mem_file_ops(&fs), allocator = alloc)
+	testing.expect_value(t, err, Open_Error.None)
+	defer store_close(&s)
 	b := bulk_make()
 	defer bulk_destroy(&b)
-	_, _, aerr := rec.apply(&s, {ops = b.ops[:]})
-	testing.expect_value(t, aerr, rec.Apply_Error{})
+	_, _, aerr := apply(&s, {ops = b.ops[:]})
+	testing.expect_value(t, aerr, Apply_Error{})
 	resident := int(track.current_memory_allocated)
 	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
 	set_b := len(s.idx.terms)*size_of(u32) + len(s.idx.off)*size_of(u32)
 	perm_b := 0
-	for o in rec.Order {
+	for o in Order {
 		perm_b += len(s.idx.ord[o]) * size_of(u32)
 	}
 	arena_b := 0
@@ -794,7 +844,7 @@ test_scale_commit_latency :: proc(t: ^testing.T) {
 	}
 	log.infof(
 		"after bulk apply: resident %.1f MB (facts %.1f, permutations %.1f, arena %.1f, term index+offsets %.2f) at %d facts, %d terms",
-		mb(resident), mb(len(s.facts)*rec.FACT_CHUNK_SIZE*size_of(rec.Fact)), mb(perm_b), mb(arena_b), mb(set_b), s.n_facts, len(s.dict.off),
+		mb(resident), mb(len(s.facts)*FACT_CHUNK_SIZE*size_of(Fact)), mb(perm_b), mb(arena_b), mb(set_b), s.n_facts, len(s.dict.off),
 	)
 
 	// The commits: each retracts the quad the previous one asserted and
@@ -803,23 +853,23 @@ test_scale_commit_latency :: proc(t: ^testing.T) {
 	track.peak_memory_allocated = track.current_memory_allocated
 	base := resident
 	times: [N]f64
-	prev: rec.Op
+	prev: Op
 	for i in 0 ..< N {
-		ops: [2]rec.Op
+		ops: [2]Op
 		n := 0
 		if i > 0 {
 			ops[n] = prev
 			ops[n].kind = .Retract
 			n += 1
 		}
-		ops[n] = rec.Op{kind = .Assert, quad = {triple = {b.subjects[i], b.preds[0], rdf.Literal{lexical = fmt.tprintf("commit %d", i), datatype = rdf.XSD_STRING}}, graph = nil}}
+		ops[n] = Op{kind = .Assert, quad = {triple = {b.subjects[i], b.preds[0], rdf.Literal{lexical = fmt.tprintf("commit %d", i), datatype = rdf.XSD_STRING}}, graph = nil}}
 		prev = ops[n]
 		n += 1
 		start := time.tick_now()
-		e, _, cerr := rec.apply(&s, {ops = ops[:n], actor = rdf.IRI("http://example.org/isms/editor")})
+		e, _, cerr := apply(&s, {ops = ops[:n], actor = rdf.IRI("http://example.org/isms/editor")})
 		times[i] = time.duration_milliseconds(time.tick_since(start))
-		testing.expect_value(t, cerr, rec.Apply_Error{})
-		testing.expect_value(t, e, rec.Epoch(i+2))
+		testing.expect_value(t, cerr, Apply_Error{})
+		testing.expect_value(t, e, Epoch(i+2))
 	}
 	lo, hi, sum := times[0], times[0], 0.0
 	for x in times {
@@ -830,4 +880,6 @@ test_scale_commit_latency :: proc(t: ^testing.T) {
 	peak := int(track.peak_memory_allocated) - base
 	log.infof("commit latency at %d facts, %d commits of 1–2 ops on the memory seam: min %.1f ms, mean %.1f ms, max %.1f ms; transient per commit up to %.1f MB over the %.1f MB resident", s.n_facts, N, lo, sum/N, hi, mb(peak), mb(resident))
 	testing.expect(t, hi < 1000, "a commit stays well inside a second")
+}
+
 }
