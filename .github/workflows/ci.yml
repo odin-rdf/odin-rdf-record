@@ -1,0 +1,144 @@
+# `make test` runs the suite and `make check` vets every package and checks the
+# public surface, so this workflow's only real job is arranging the checkout the
+# way the Makefile's collections expect, and installing the one thing that is
+# not Odin.
+#
+# Two checkouts, not one. This repo reaches the parser through
+# -collection:rdf=../odin-rdf-parser, relative to this repo, so both go into
+# sibling directories under the workspace rather than the default layout.
+#
+# This is the last of the family's five repositories to get CI (RECORD-I-0005
+# and -I-0007 are what made the gap worth closing: `make check` now ends in a
+# surface check that nothing else enforces). Until now this repository was
+# built locally against the parser's `main`, which is also why the pin below is
+# a decision rather than a copy of what was already here.
+name: CI
+
+# Documentation-only commits do not run this workflow.
+#
+# **`doc/**` is deliberately NOT ignored, and `doc/design/**` is.** Everything
+# under doc/ used to be prose; `doc/api-surface.txt` is not — it is the
+# normative statement of what this package exports, and `make api` fails when
+# the sources and that file disagree. Ignoring it would mean a commit that
+# edits only the surface file skips the one check that reads it, which is
+# precisely backwards.
+#
+# A denylist, not an allowlist, and the asymmetry is the argument: an allowlist
+# fails toward *no CI* when a source directory is added and not named, which is
+# the same hazard as a skip list. A denylist fails the other way — a pointless
+# run until the list catches up. Wasteful, visible, harmless.
+#
+# `.github/**` is absent from the list: a change to CI must run CI.
+# `workflow_dispatch` carries no filter, so any commit can be run by hand.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.metis/**'
+      - 'doc/design/**'
+      - 'README.md'
+      - 'LICENSE'
+  pull_request:
+    paths-ignore:
+      - '.metis/**'
+      - 'doc/design/**'
+      - 'README.md'
+      - 'LICENSE'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      # One platform failing should not hide the other's results.
+      fail-fast: false
+      matrix:
+        # **Two runners, where the siblings run three.** This repository is
+        # POSIX only by design, one of its two recorded departures from family
+        # convention: Linux is the production environment, darwin is
+        # development (F_FULLFSYNC with an fsync fallback), and there is no
+        # Windows `File_Ops`. odin-rdf-shacl and odin-rdf-sparql can run a
+        # Windows leg because they only ever open a store over the
+        # platform-free memory seam; this repository's own suites do not have
+        # that option — `proof_test`, `scale_test` and `tool_test` drive real
+        # files through `posix_file_ops`, which is `#+build linux, darwin`.
+        #
+        # There is no `Term_ID` width matrix either, the other departure: both
+        # widths are fixed by design because the inline encoding is frozen at
+        # first write, so `make test` runs once per runner.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: odin-rdf-record
+
+      # **odin-rdf-parser `v0.1.2` is the pin, and this repository's first.**
+      # It is pinned to a released tag rather than tracking `main` so that an
+      # upstream commit cannot turn this repository's CI red without a
+      # deliberate bump here: a red build then means this repository broke,
+      # which is the only way to tell a local regression from an upstream one.
+      # Local development builds against the parser's `main` and has since the
+      # repository was founded; that is now a difference CI will surface rather
+      # than hide.
+      #
+      # `v0.1.2` and not `v0.1.1`, and the reason is specific to a system of
+      # record. RDF-T-0026 fixed `resolve()` running *absolute* IRIs through
+      # RFC 3986 par. 5.2 reference resolution and stripping their dot segments,
+      # base or no base — so a Turtle or TriG document loaded an IRI it does not
+      # contain, which Turtle par. 6.3 does not permit and RDF 1.1 Concepts
+      # par. 3.2 forbids outright ("further normalization MUST NOT be
+      # performed"). `record/ingest` loads through that parser and **the log is
+      # the durable representation**: below `v0.1.2` this store can log an IRI
+      # its source document did not contain — faithfully, tamper-evidently, and
+      # wrongly, with both verifiers agreeing on the wrong bytes forever. No
+      # other consumer has a reason this strong; the family file names this
+      # repository as the one that should care most.
+      #
+      # To bump it: change the ref, run `make check` and `make test` locally
+      # against the new checkout, and commit them together. A collection is
+      # resolved in the *importing* compilation, so this repository's sources
+      # are built against whichever parser this file names.
+      - uses: actions/checkout@v5
+        with:
+          repository: odin-rdf/odin-rdf-parser
+          ref: v0.1.2
+          path: odin-rdf-parser
+
+      - uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: latest
+
+      - name: Odin version
+        run: odin version
+
+      # Unlike the siblings, this repository's own build needs python3 twice
+      # over, so it is asserted rather than assumed. `make test` runs
+      # `tests/verify/rdflog_verify.py`, the independent verifier written from
+      # `log.md` alone, which agrees with the Odin verifier verdict for verdict
+      # over a 29-case fault corpus — the proof layer is not optional here.
+      # `make check` ends in `make api`, which runs `tests/api/api_surface.py`.
+      # Both are stdlib only; the *library* still has no external dependency
+      # beyond the parser.
+      - name: Python version
+        run: python3 --version
+
+      # `make check` vets every package at both the ordinary and the
+      # RECORD_SCALE build, then diffs the exported surface against
+      # doc/api-surface.txt (RECORD-I-0005). A name that quietly stops being
+      # @(private) fails here.
+      - name: Vet every package and check the public surface
+        working-directory: odin-rdf-record
+        run: make check
+
+      # `make test` builds the CLI, runs the suite, and then runs the scale
+      # measurement a second time optimized (`-define:RECORD_SCALE=true
+      # -o:speed`) — a debug harness would measure the harness, not the store.
+      - name: Test
+        working-directory: odin-rdf-record
+        run: make test
