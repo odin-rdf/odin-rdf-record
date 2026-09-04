@@ -78,12 +78,16 @@ Filter :: struct {
 // express — a view, not a container; nothing is copied and range_len
 // is arithmetic. (RECORD-A-0005 had promised a second `delta` run here
 // for a structure never built; RECORD-A-0012 replaced the structure
-// instead, and no consumer had named the field.)
+// instead, and no consumer had named the field.) `all` is what
+// distinguishes a history range from a match range, and it is set by
+// snapshot_history alone (api.md par. 12.6): the fields are internal,
+// so no filter a consumer can write reaches it.
 Range :: struct {
 	snap:     Snapshot,
 	order:    Order,
 	lo, hi:   int,
 	residual: Pattern,
+	all:      bool, // every generation, the interval test suppressed
 }
 
 // range_len is the candidate count: an exact count of every fact
@@ -106,6 +110,7 @@ Scan :: struct {
 	g_want:  Term_ID, // the stored G value to require when g_bound
 	g_bound: bool,
 	scoped:  bool, // Filter.scope == .Set: decided by length, never by pointer
+	all:     bool, // Range.all: a history scan, no interval test
 }
 
 // snapshot_match answers a pattern as one prefix range, choosing the
@@ -131,6 +136,36 @@ snapshot_match :: proc(snap: Snapshot, p: Pattern) -> Range {
 // only the window width differs.
 snapshot_match_as :: proc(snap: Snapshot, p: Pattern, order: Order) -> Range {
 	assert(snap.idx != nil, "snapshot_match_as: a released snapshot")
+	return window(snap, p, order, false)
+}
+
+// snapshot_history answers a pattern as every generation that ever
+// matched it — visible at this snapshot's epoch or not — over the
+// same prefix window snapshot_match would compute (api.md par. 12.6).
+// It is the difference between two absences the visible read cannot
+// tell apart: a pattern nothing has ever matched, and one that matched
+// once and is read outside the interval it lived in. The range drives
+// range_iter and scan_next exactly as a match range does, with one
+// omission: the scan applies the residual components, origin, and the
+// graph set, and never the interval test. Each id it yields carries
+// its own [assert, retract) through snapshot_fact, and its origin
+// through snapshot_derived — the pairing is the point. It is a
+// separate entry point, not a Filter option, deliberately: no filter a
+// consumer can state makes snapshot_match return a retracted fact.
+// Only facts this set published are in the window, so a fact applied
+// after publication is outside history too, by the same bound that
+// keeps it invisible.
+snapshot_history :: proc(snap: Snapshot, p: Pattern) -> Range {
+	assert(snap.idx != nil, "snapshot_history: a released snapshot")
+	order, _ := choose_order(p)
+	return window(snap, p, order, true)
+}
+
+// window is the two rank descents behind snapshot_match_as and
+// snapshot_history: the pattern's bound prefix over the named order,
+// as a range that either applies the interval test or does not.
+@(private = "file")
+window :: proc(snap: Snapshot, p: Pattern, order: Order, all: bool) -> Range {
 	key := order_key(order)
 	want: [4]Term_ID
 	k := 0
@@ -147,7 +182,7 @@ snapshot_match_as :: proc(snap: Snapshot, p: Pattern, order: Order) -> Range {
 	set := snap.idx
 	lo := perm_rank(set.leaves, set.inners, set.facts, key, set.ord[order], want, k, false)
 	hi := perm_rank(set.leaves, set.inners, set.facts, key, set.ord[order], want, k, true)
-	return Range{snap = snap, order = order, lo = lo, hi = hi, residual = p}
+	return Range{snap = snap, order = order, lo = lo, hi = hi, residual = p, all = all}
 }
 
 // range_iter binds the filter set and returns the scan. Origin and
@@ -170,6 +205,7 @@ range_iter :: proc(r: Range, f: Filter) -> Scan {
 		origin = f.origin,
 		graphs = f.graphs,
 		scoped = f.scope == .Set,
+		all    = r.all,
 		s      = r.residual.s,
 		p      = r.residual.p,
 		o      = r.residual.o,
@@ -186,6 +222,8 @@ range_iter :: proc(r: Range, f: Filter) -> Scan {
 // retract loaded atomically — the one field a live writer mutates, and
 // a mutation a reader misses is invisible by monotonicity), the
 // residual components, origin, and the graph set. False ends the scan.
+// A history range (snapshot_history) skips the visibility test and
+// nothing else.
 scan_next :: proc(sc: ^Scan) -> (id: Fact_ID, ok: bool) {
 	candidates: for {
 		ok = false
@@ -193,9 +231,11 @@ scan_next :: proc(sc: ^Scan) -> (id: Fact_ID, ok: bool) {
 			break
 		}
 		f := fact_in(sc.snap.idx.facts, id)
-		retract := sync.atomic_load_explicit(&f.retract, .Relaxed)
-		if !(f.assert <= sc.snap.epoch && sc.snap.epoch < retract) {
-			continue
+		if !sc.all {
+			retract := sync.atomic_load_explicit(&f.retract, .Relaxed)
+			if !(f.assert <= sc.snap.epoch && sc.snap.epoch < retract) {
+				continue
+			}
 		}
 		if sc.s != 0 && f.s != sc.s {
 			continue

@@ -9,7 +9,9 @@
 # Lines beginning with `#` and blank lines are commentary and are not compared.
 # Every other line is one exported name, sorted.
 #
-# 292 top-level declarations, 73 exported. **Every name below is API.** Typing
+# 292 top-level declarations, 73 exported (74 since RECORD-T-0044:
+# `snapshot_history`, api.md par. 12.6, built at a consumer's asking). **Every
+# name below is API.** Typing
 # `record.` offers what a consumer should use and nothing else -- a completion
 # list is an interface, and no file the LSP does not read can fix it.
 #
@@ -101,6 +103,7 @@ snapshot_derived
 snapshot_epoch_meta
 snapshot_exists
 snapshot_fact
+snapshot_history
 snapshot_kind
 snapshot_match
 snapshot_match_as

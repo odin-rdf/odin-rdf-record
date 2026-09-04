@@ -96,9 +96,10 @@ rt_build :: proc(t: ^testing.T, fs: ^OFS, s: ^Store) -> (rt: RT) {
 
 // oracle_collect is the brute-force answer: every fact id, checked
 // against the pattern, the epoch, and the filters directly on the
-// fact table — no permutation, no binary search, no scan.
+// fact table — no permutation, no binary search, no scan. `all` drops
+// the epoch test and nothing else: the oracle for snapshot_history.
 @(private = "file")
-oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter) -> (out: [dynamic]Fact_ID) {
+oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter, all := false) -> (out: [dynamic]Fact_ID) {
 	for id in Fact_ID(0) ..< Fact_ID(snap.idx.n_facts) {
 		fact := store_fact(snap.store, id)
 		if p.s != 0 && fact.s != p.s {
@@ -116,7 +117,7 @@ oracle_collect :: proc(snap: Snapshot, p: Pattern, f: Filter) -> (out: [dynamic]
 				continue
 			}
 		}
-		if !(fact.assert <= snap.epoch && snap.epoch < fact.retract) {
+		if !all && !(fact.assert <= snap.epoch && snap.epoch < fact.retract) {
 			continue
 		}
 		if f.origin != .Any && store_derived(snap.store, id) != (f.origin == .Derived) {
@@ -227,6 +228,116 @@ test_read_oracle :: proc(t: ^testing.T) {
 	testing.expect(t, slice.equal(got[:], want[:]), "the head's live set, by hand")
 	delete(got)
 	snapshot_release(&snap)
+}
+
+// RECORD-T-0044: snapshot_history yields every generation the pattern
+// ever matched, visible at the pinned epoch or not, with the residual,
+// origin and graph set still applied — the same matrix as the visible
+// oracle with the interval test dropped, at every epoch, so the answer
+// is epoch-independent except through the set's n_facts bound. Then
+// the consumer's own case by hand: the two absences a visible read
+// cannot tell apart.
+@(test)
+test_read_history :: proc(t: ^testing.T) {
+	fs: OFS
+	defer ofs_destroy(&fs)
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	rt := rt_build(t, &fs, &s)
+
+	pats := [?]Pattern{
+		{},
+		{s = 1},
+		{s = 3},
+		{p = 2},
+		{o = 3},
+		{o = rt.five},
+		{s = 1, p = 2},
+		{s = 3, o = rt.five},
+		{s = 1, p = 2, o = 3},
+		{g = MATCH_DEFAULT_GRAPH},
+		{g = 4},
+		{p = 2, g = 4},
+		{s = 9},
+	}
+	origins := [3]Origin{.Any, .Asserted, .Derived}
+	g4 := [1]Term_ID{4}
+	gd := [1]Term_ID{MATCH_DEFAULT_GRAPH}
+	Scoping :: struct {
+		scope:  Graph_Scope,
+		graphs: []Term_ID,
+	}
+	graph_sets := [3]Scoping{{.All, nil}, {.Set, gd[:]}, {.Set, g4[:]}}
+
+	checked := 0
+	for epoch in Epoch(0) ..= 4 {
+		snap, serr := store_at(&s, epoch)
+		testing.expect_value(t, serr, Snapshot_Error.None)
+		for p in pats {
+			h := snapshot_history(snap, p)
+			m := snapshot_match(snap, p)
+			testing.expect_value(t, range_len(h), range_len(m)) // the same window
+			for origin in origins {
+				for graphs in graph_sets {
+					f := Filter{origin = origin, scope = graphs.scope, graphs = graphs.graphs}
+					want := oracle_collect(snap, p, f, all = true)
+					got := scan_collect(h, f)
+					testing.expectf(
+						t,
+						slice.equal(got[:], want[:]),
+						"history: pattern %v epoch %d origin %v graphs %v: got %v, want %v",
+						p, epoch, origin, graphs, got, want,
+					)
+					// Every visible id is in the history, and a history id is
+					// visible exactly when snapshot_visible says so.
+					visible := scan_collect(m, f)
+					for id in got {
+						testing.expectf(
+							t,
+							slice.contains(visible[:], id) == snapshot_visible(snap, id),
+							"history: pattern %v epoch %d: id %d visible-by-scan and by snapshot_visible disagree",
+							p, epoch, id,
+						)
+					}
+					for id in visible {
+						testing.expectf(t, slice.contains(got[:], id), "history: pattern %v epoch %d: visible id %d missing from history", p, epoch, id)
+					}
+					checked += 1
+					delete(want)
+					delete(got)
+					delete(visible)
+				}
+			}
+		}
+		snapshot_release(&snap)
+	}
+	testing.expect_value(t, checked, len(pats)*5*3*3)
+
+	// The consumer's case. (alice, knows, bob) is f0 [1,2) and f4
+	// [3,live): at epoch 2 the visible read finds nothing, and the
+	// history finds both generations, each carrying the interval that
+	// says why it is not there. (9, ?, ?) has never been asserted: both
+	// reads find nothing, and that is the other absence.
+	snap, _ := store_at(&s, 2)
+	defer snapshot_release(&snap)
+	any := Filter{origin = .Any, scope = .All}
+	testing.expect(t, !snapshot_exists(snap, {s = 1, p = 2, o = 3}, any), "retracted at epoch 2: invisible to match")
+	got := scan_collect(snapshot_history(snap, {s = 1, p = 2, o = 3}), any)
+	defer delete(got)
+	want := [2]Fact_ID{0, 4}
+	testing.expect(t, slice.equal(got[:], want[:]), "retracted at epoch 2: two generations in the history")
+	if len(got) == 2 {
+		f0, f4 := snapshot_fact(snap, got[0]), snapshot_fact(snap, got[1])
+		testing.expect(t, f0.assert == 1 && f0.retract == 2, "f0 lived [1,2)")
+		testing.expect(t, f4.assert == 3 && f4.retract == LIVE_EPOCH, "f4 lives [3,live) — asserted after this snapshot's epoch")
+		testing.expect(t, !snapshot_visible(snap, got[0]) && !snapshot_visible(snap, got[1]), "neither is visible at epoch 2")
+		testing.expect(t, !snapshot_derived(snap, got[0]) && !snapshot_derived(snap, got[1]), "both asserted, not derived")
+	}
+	never := scan_collect(snapshot_history(snap, {s = 9}), any)
+	defer delete(never)
+	testing.expect(t, len(never) == 0, "never asserted: absent from the history too")
+	testing.expect(t, !snapshot_exists(snap, {s = 9}, any), "never asserted: absent from match")
 }
 
 // RECORD-T-0029: an empty graph set admits nothing, however it was

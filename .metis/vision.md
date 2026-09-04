@@ -232,6 +232,21 @@ their side, once that API is real.
 > long-lived tenant and the insert/sort threshold on the production
 > machine — `RECORD-A-0012`'s triggers.
 
+> **Amended 2026-09-04, later (`RECORD-T-0044`): `snapshot_history` — the
+> first capability filed against this store by the application, and
+> `api.md` §12.6's `History` built as written.** `v0.8.0` made `Range`
+> opaque in fact as well as in statement, and one consumer call site had been
+> reading its window directly to tell "never asserted" from "asserted and
+> since retracted" — the two absences `scan_next` cannot distinguish, and the
+> whole of a temporal read's "not defined at this date". The consumer did not
+> ask for the field back; it asked for the question to have a published
+> answer, and offered a flag on `Filter` first. §12.6 had already refused that
+> spelling on the audit argument — no filter combination may make `Match`
+> return retracted facts — so history is its own entry point over the same
+> window and the same scan, the interval test omitted and nothing else; the
+> visible path pays one predictable branch. **Unreleased on `main`**; 74
+> exported names.
+
 ## Future State
 
 An embedded store where:

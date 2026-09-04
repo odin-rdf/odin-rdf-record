@@ -1227,6 +1227,22 @@ opposite, and expressing that as a flag on `Filter` would mean some combination 
 options makes `Match` silently return retracted facts. That is the kind of thing
 that produces a wrong answer in an audit years later, so it gets its own name.
 
+*Amended 2026-09-04 (RECORD-T-0044): **built, as written, and the paragraph above
+was tested by a consumer.** `snapshot_history(snap, p) -> Range` is `History`;
+the filter goes to `range_iter` as it does for a match range, so "origin still
+applies, and is still required" holds by construction, and so do graph scope and
+the residual — the scan is the same scan with the interval test omitted and
+nothing else, one implementation. The flag lives inside `Range`, which is an
+opaque handle (`doc/api-surface.txt`), so no `Filter` a consumer can write
+reaches it and `snapshot_match` cannot return a retracted generation under any
+option; `range_len` on a history range is the same count. The consumer that
+asked (`odin-rdf-app`) had been reading `Range`'s window directly through
+`v0.7.0` to ask exactly this question — "never asserted" against "asserted and
+since retracted", on a miss path — and proposed an `Epoch_Scope` on `Filter`
+first, a separate entry point second. The paragraph above had already chosen,
+before the case existed. Layer 2's `EntityHistory` is still unbuilt; nothing has
+asked for the timeline.*
+
 Layer 2 shapes it into a timeline:
 
 ```go
