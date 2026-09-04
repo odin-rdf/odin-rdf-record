@@ -549,6 +549,15 @@ Unchanged, and untouched by everything above: six sorted `[]FactID` slices,
 *Amended 2026-08-27 (RECORD-T-0028): **seven** — `GPOS` joined them, 11.2 MB at
 4×10⁵ facts. §5.1's note says why, and the task carries the measurement.*
 
+*Amended 2026-09-04 (RECORD-I-0009, `RECORD-A-0012`): **a permutation is a
+copy-on-write B+tree of `FactID`s now, not a flat slice.** Leaves hold fact ids
+and nothing else, 256 to a 1 KB leaf, so the pointer-free property and the
+per-fact byte count survive — 11.1 MB packed at 4×10⁵ facts, drifting toward
+~15.5 MB at steady-state fill between wakes, since every wake repacks full.
+Inner nodes carry each child's minimum key and entry count, which is how a
+prefix bound becomes a rank and `Len()` stays exact and O(1) after the match.
+§5.2 below is the reason, and is superseded by this note.*
+
 `architecture.md` §Scale's argument for taking all six — every sort order for
 merge joins, every variable order for §7.4's worst-case-optimal joins — was made
 on the grounds that six is free. Under the density premise six is not free, and
@@ -674,6 +683,27 @@ Two consequences worth stating rather than discovering:
 - **N = 1024 is derived, not measured.** It sits near the optimum of two competing
   terms — delta copy grows with N, amortised rebuild shrinks with it — but the
   optimum moves with the real write rate and fact count.
+
+*Superseded 2026-09-04 (RECORD-I-0009, `RECORD-A-0012`). The delta structure
+was never built. What shipped instead, from 2026-08-20 to 2026-09-04, was the
+naive form this section priced at 9.6 MB of copying — and worse than priced,
+because the "copy" was `buildPermutations()` itself, the full radix re-sort of
+every order on every commit: **37.1 ms of a 37.5 ms `apply` at 4×10⁵ facts,
+20 MB transient**, measured when the application's interactive commit rate
+made it visible. The answer chosen was not the delta but a **copy-on-write
+B+tree of `FactID`s per order**: a commit path-copies the leaf and ancestors
+each insert touches (~10 µs and a few KB for one assert across all seven
+orders), a reader pinned across commits retains those path copies rather than
+a set (0.6–0.7 MB over 50 commits against 10.7 MB), and matches are 10–30%
+faster because the descent compares in-node keys and gathers only in one leaf.
+`apply` on the memory seam is **0.24 ms** mean. Everything this section said
+about the flat array's virtues — scan locality, single-level search, free
+positional rank — was re-measured: scans run at 2.5 ns per candidate on both,
+and rank is the sum of counts down one descent. The rebuild it describes is
+still the boot path (§8 below, `log.md` §8): sort, then pack into full leaves in
+one linear pass, 1.1 ms on top of the 37–48 ms sort. The chunked-permutation
+paragraph above stands as the record of why a two-level *array* was rejected;
+a tree is not that shape, and the measurements are the reply.*
 ---
 
 ## 6. What is deliberately not resident
@@ -771,9 +801,9 @@ Three things follow that are worth stating rather than discovering:
 |---|---|---|
 | Six permutations → three | 4.8 MB | The only item with a genuine read-performance cost. Fails the standing constraint (§5). |
 | Shared TBox dictionary across tenants | Large, if tenants matched | Tenants upgrade to new application versions independently and licensed functionality varies the TBox, so tenants do not reliably share one. The sharing would be conditional, and conditional sharing across a tenant boundary is exactly the complexity the constraint forbids. |
-| Flat copy-on-write permutations | — | 9.6 MB of garbage per commit, which defeats §7's GC strategy by itself. §5.2. |
+| Flat copy-on-write permutations | — | 9.6 MB of garbage per commit, which defeats §7's GC strategy by itself. §5.2. *(This is what shipped from 2026-08-20 to 2026-09-04, as a full re-sort per commit; replaced by the fact-id B+tree, `RECORD-A-0012`.)* |
 | Chunked permutations (depth-2, cumulative spine) | — | 4× the delta's allocation, and it makes every layer-1 primitive two-level. Right shape for the fact table and the dictionary, wrong one here. §5.2. |
-| Inline-key B-tree (`BTreeG[Quad]`) | — | Faster `Match` — probes land in a node rather than gathering from `facts[]` — and copy-on-write snapshots from a tested library. But the key needs a generation tiebreaker, so 24 bytes, and six indices at ~70% fill is ~82 MB against 9.6 MB. Rejected on density, not merit: at one store per machine this is the better design. |
+| Inline-key B-tree (`BTreeG[Quad]`) | — | Faster `Match` — probes land in a node rather than gathering from `facts[]` — and copy-on-write snapshots from a tested library. But the key needs a generation tiebreaker, so 24 bytes, and six indices at ~70% fill is ~82 MB against 9.6 MB. Rejected on density, not merit: at one store per machine this is the better design. *(Annotated 2026-09-04: the tree that was adopted, `RECORD-A-0012`, is not this one — its leaves hold fact ids only, 11.1 MB packed, and only inner nodes carry keys. The density objection here stands; it never applied to that shape.)* |
 | Persistent vector / RRB trie (Immer, Clojure) | — | Solves the insert copying, but binary search becomes a 4-level pointer descent and it reintroduces ~78,000 pointers per tenant, undoing §4.1. |
 | Skip list, ART, packed memory array, LSM runs, succinct self-index | — | Each fails at least one of: pointer-free, positional rank, immutable without in-place mutation, insertable without rebuild. §5.2. |
 | 40-bit IDs (`[5]byte`) | 4.8 MB vs 64-bit | Alignment is fine — 28-byte `Fact`, no padding. But Go has no `uint40`, so every compare becomes byte assembly on the hot path, and the only thing 40 bits buys over 32 is inline range, which §3.2 shows costs ~48 bytes per distinct overflow value against 1.6 MB flat. |
@@ -791,6 +821,7 @@ Per active tenant, at `architecture.md`'s target of 4×10⁵ facts and ~10⁵ te
 |---|---|---|---|
 | Fact table | 22.4 MB | 9.6 MB | 2 |
 | Six permutations | 9.6 MB | 9.6 MB | 5 |
+| *(2026-09-04: seven, as B+trees of fact ids)* | | *11.1 MB packed; ~15.5 MB at steady-state fill* | 5, `RECORD-A-0012` |
 | Derived origin | in struct | 0.05 MB | 2.2 |
 | Dictionary | ~18 MB | ~7 MB | 4 |
 | Live-quad index | ~19 MB | 0 | 6 |

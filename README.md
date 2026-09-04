@@ -110,6 +110,18 @@ logs that now contain both new tags. Proven against the W3C rdf12 eval
 suites end to end: 29 turtle and 25 trig documents, every one carrying a
 triple term, every one committing.
 
+**2026-09-04 — `v0.8.0`: the permutations are B+trees; a commit is 0.24 ms.**
+Every `apply` had been re-sorting all seven permutations from scratch, 37 ms
+of a 37.5 ms commit at 4×10⁵ facts with 20 MB allocated transiently. Each
+permutation is now a copy-on-write B+tree of fact ids — leaves hold ids only,
+so the resident size is what it was, 11.1 MB packed — and a commit copies the
+leaf and ancestors each insert touches: **0.24 ms** mean on the memory seam,
+0.43 MB transient, matches 10–30% faster, scans unchanged. Boot still sorts
+and then packs the trees full, 1 ms on top of the sort, because building by
+inserting during replay was measured at 13× the cost. Not a format change;
+neither engine changed a line. `RECORD-A-0012` records the decision and
+`record/btree_bench_test.odin` the numbers.
+
 ## Position in the family
 
 > **Amended 2026-08-20 (RECORD-I-0003).** The paragraph and table below

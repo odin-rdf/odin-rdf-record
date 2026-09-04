@@ -752,7 +752,12 @@ budgets for the steady-state write path. *(Measured 2026-08-19, RECORD-T-0008:
 true for a radix sort — 39 ms optimized for the six sorts at 3.4×10⁵ facts — and
 optimistic ~18× for a comparison sort; see the api.md §5.2 amendment. The
 build-by-sorting conclusion stands either way: incremental insertion would be
-minutes.)*
+minutes.)* *(Re-asked 2026-09-04, RECORD-A-0012, when the resident permutation
+became a B+tree — the structure this argument was made against. It holds by
+13×: seven trees built by streaming inserts during replay cost 568 ms at 72%
+fill, against 44 ms for the sort followed by a linear pack into full leaves.
+The sort is linear passes over columns; an insert is a random descent with
+gathers and a memmove. Boot is sort-then-pack; inserting is for commits.)*
 
 `liveFact` needs a `map[Quad]FactID` of currently-live facts during replay. That is
 transient replay scaffolding, ~20 MB at 4×10⁵ facts, and it can be dropped

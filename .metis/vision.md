@@ -211,6 +211,27 @@ their side, once that API is real.
 > split would have forced 38 private symbols public and taken the total
 > exported from 121 to 161.
 
+> **Amended 2026-09-04 — `v0.8.0`, `RECORD-I-0009` and `RECORD-A-0012`: the
+> permutations are B+trees, and a commit costs a quarter of a millisecond.**
+> Every `apply` had been re-sorting all seven orders from scratch — 37.1 ms of
+> a 37.5 ms commit at 4×10⁵ facts, 20 MB transient — which `RECORD-A-0005`
+> had priced as allocator traffic and the application's interactive commit
+> rate made visible. A permutation is now a copy-on-write B+tree of fact ids:
+> leaves hold ids only (11.1 MB packed, pointer-free still), inner nodes hold
+> each child's minimum key and count, and a commit path-copies the leaf and
+> ancestors each insert touches under the epoch's generation. `apply` on the
+> memory seam is **0.24 ms** mean, transient **0.43 MB**; matches are 10–30%
+> faster; scans and `range_len` unchanged in cost and exactness. Boot is
+> unchanged in shape — sort, then pack full, 1.1 ms on top of the sort —
+> because `log.md` §8 was re-measured for the tree and holds by 13×; every
+> wake is a full repack. A set dying on a reader's thread retires its roots
+> for the writer to drain, so the arena is mutated on one thread only.
+> **Not a format change**; both engines compile and pass with no source
+> change and every read pin holds. The flat array merged in place (440 µs)
+> is the recorded fallback. What is left to watch is fill drift on a
+> long-lived tenant and the insert/sort threshold on the production
+> machine — `RECORD-A-0012`'s triggers.
+
 ## Future State
 
 An embedded store where:

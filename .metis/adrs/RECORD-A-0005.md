@@ -58,7 +58,9 @@ Three parts:
    contract-documented like every lifetime in the family. The expected
    consumer discipline (request-scoped snapshots, nothing held across
    think-time) keeps lifetimes trivial in practice.
-3. **v1 permutation maintenance is flat copy-on-write.** A commit sorts
+3. **v1 permutation maintenance is flat copy-on-write.** *(Superseded
+   2026-09-04 by `RECORD-A-0012`: a permutation is a copy-on-write B+tree of
+   fact ids, and a commit inserts. Parts 1 and 2 stand.)* A commit sorts
    fresh arrays for the changed orders and frees the old ones when their
    set's count drops to zero. At the premise's single-digit human-paced
    commits per second this is allocator traffic, not garbage. The delta-run

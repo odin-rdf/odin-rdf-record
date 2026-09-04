@@ -107,6 +107,11 @@ Everything before it: RECORD-T-0014 through RECORD-T-0017.
 - **`RECORD-A-0005`'s trigger** annotated: does not fire at 31–35 ms; the
   delta structure stays deferred; the conditions that would fire it
   stated.
+  *(Re-measured 2026-09-04, RECORD-T-0042: the same test reads **min 0.18,
+  mean 0.24, max 1.04 ms**, transient **0.43 MB** per commit over 23.7 MB
+  resident. The 31–35 ms was the full radix re-sort of every order on
+  every commit, not the copy this task priced; `RECORD-A-0012` replaced the
+  flat array with a B+tree of fact ids and the commit inserts.)*
 - **The consumer range**: `CONSUMER_ID_FIRST`/`CONSUMER_ID_LAST` in
   `resident.odin` beside the inline constants, `api.md` §3 amended. No
   runtime, no check.
