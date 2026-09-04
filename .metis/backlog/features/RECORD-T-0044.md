@@ -306,6 +306,5 @@ borrows the snapshot you already hold and takes no reference of its own,
 so release the snapshot as you would after any read, and after the range
 and scan are done with.
 
-**To adopt.** Pin whatever tag includes `ce1067d` — none does today; cutting
-`v0.9.0` is the record owner's call and has been raised. Until then, a
-local build against `main` sees it.
+**To adopt.** Pin **`v0.9.0`** (2026-09-04, `eb270c1`, GitHub release with
+notes). Both engines pin it as of the same day with no source change.

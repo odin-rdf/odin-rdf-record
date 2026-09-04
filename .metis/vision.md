@@ -244,8 +244,12 @@ their side, once that API is real.
 > spelling on the audit argument — no filter combination may make `Match`
 > return retracted facts — so history is its own entry point over the same
 > window and the same scan, the interval test omitted and nothing else; the
-> visible path pays one predictable branch. **Unreleased on `main`**; 74
-> exported names.
+> visible path pays one predictable branch. **Tagged `v0.9.0` the same day**
+> at `eb270c1`, both engines walked (`SHACL-T-0044`, `SPARQL-T-0049`: no
+> source change, every pin holding); 74 exported names. The release's one
+> finding was about CI, not the code: the scale pass's one-second boot
+> budget ran at 1007 ms on a shared ubuntu runner where the previous green
+> run had 941 — a rerun passed; filed as `RECORD-T-0045`.
 
 ## Future State
 
