@@ -220,3 +220,92 @@ not a second acquisition and not a longer-lived one.
   `snapshot_derived` — stated in the doc comment and tested; visible path
   unchanged — the oracle suite is untouched and green; `api-surface.txt`
   covers it and `Range` stays opaque — yes.
+
+## Handoff for the consumer (odin-rdf-app)
+
+**What you get.** One new name, `snapshot_history`, on `main` at `ce1067d`
+and in no tag yet. Everything else you already call is unchanged. It is not
+a `Filter` option: `api.md` §12.6 had decided that the history read gets its
+own name so that no filter combination makes `snapshot_match` return a
+retracted fact, and that is what was built.
+
+```odin
+snapshot_history :: proc(snap: Snapshot, p: Pattern) -> Range
+```
+
+The range it returns is driven exactly like a match range — `range_iter`
+with a stated `Filter`, then `scan_next` — and the scan applies the residual
+components, origin and graph scope as before. The only difference is that
+the interval test is not applied, so every generation in the window is
+yielded, in the permutation's order, whether or not it is visible at the
+snapshot's epoch.
+
+**The miss path, spelled out.** Same snapshot, same pattern, same filter
+you just used for the visible read:
+
+```odin
+// The visible read has answered "nothing". Ask why.
+f := record.Filter{origin = .Asserted, scope = .Set, graphs = scope}
+h := record.snapshot_history(snap, p)
+sc := record.range_iter(h, f)
+seen := false
+for id in record.scan_next(&sc) {
+	seen = true
+	fact := record.snapshot_fact(snap, id) // ^Fact: s, p, o, g, assert, retract
+	switch {
+	case fact.assert > snap.epoch:
+		// not yet asserted at this date — it exists later in the log
+	case fact.retract <= snap.epoch:
+		// asserted and since retracted: lived [fact.assert, fact.retract)
+	}
+	// who and when, per generation:
+	meta := record.snapshot_epoch_meta(snap, fact.assert) // wall, actor, reason
+	if fact.retract != record.LIVE_EPOCH {
+		gone := record.snapshot_epoch_meta(snap, fact.retract)
+	}
+}
+if !seen {
+	// never asserted: no generation matching p exists in this store
+}
+```
+
+**Four things to know.**
+
+1. **Three answers, not two.** A snapshot pinned by `store_at(&db, e)` reads
+   the *published* index set with the epoch pinned to `e`, so the history at
+   `e` also holds generations asserted *after* `e` (`fact.assert > e`). Your
+   "not defined at this date" therefore splits into *since retracted* and
+   *not yet*, and the intervals tell them apart; "never" is the empty scan.
+   Both branches are pinned in `test_read_history` (`record/read_test.odin`).
+2. **Origin is still required, and so is scope.** The same `Filter`
+   discipline as the visible read: an unstated origin or scope is refused by
+   `range_iter` at the first read — and as the `v0.5.0` note warns, from a
+   spawned thread that is a hang rather than a failure. Under `.Set`, a
+   retracted generation in a graph outside your set is not yielded, which is
+   the authorization ceiling holding on the miss path too.
+3. **Order is the permutation's, not the epoch's.** Ids come out in the
+   chosen order's sort key (`choose_order` picks it from the pattern, the
+   same one `snapshot_match` would use), so several generations of one quad
+   arrive adjacent but not sorted by `assert`. A timeline is a sort of tens
+   of elements on your side; `api.md` §12.6's `EntityHistory` is the
+   materialising verb for that and is unbuilt because nothing has asked.
+4. **Classification is by the verbs you already have.** `snapshot_fact` gives
+   the interval, `snapshot_derived` the origin, `snapshot_visible` the
+   visible-at-this-epoch answer for one id; `snapshot_epoch_meta` turns an
+   epoch into wall/actor/reason (actor and reason are `Term_ID`s, 0 for
+   none, resolved through `snapshot_term` + `snapshot_term_destroy`).
+   `range_len` on a history range is the same exact upper bound it is on a
+   match range — the window is identical.
+
+**Cost.** Not measured, per your own rule. The window is the same two rank
+descents as the visible read, and the scan is the visible scan minus one
+comparison per candidate; the visible path gained one predictable branch.
+
+**Snapshot contract.** Unchanged (`RECORD-A-0005`): the history range
+borrows the snapshot you already hold and takes no reference of its own,
+so release the snapshot as you would after any read, and after the range
+and scan are done with.
+
+**To adopt.** Pin whatever tag includes `ce1067d` — none does today; cutting
+`v0.9.0` is the record owner's call and has been raised. Until then, a
+local build against `main` sees it.
