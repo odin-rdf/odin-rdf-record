@@ -4,14 +4,14 @@ level: initiative
 title: "The permutations become B+trees: a commit costs microseconds, a wake costs what it did"
 short_code: "RECORD-I-0009"
 created_at: 2026-09-04T18:49:24.560947+00:00
-updated_at: 2026-09-04T19:04:15.281774+00:00
+updated_at: 2026-09-04T19:33:05.734966+00:00
 parent: RECORD-V-0001
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#initiative"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false

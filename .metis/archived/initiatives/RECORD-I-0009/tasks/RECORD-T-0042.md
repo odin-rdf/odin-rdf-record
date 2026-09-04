@@ -7,7 +7,7 @@ created_at: 2026-09-04T18:57:19.724917+00:00
 updated_at: 2026-09-04T19:23:13.082098+00:00
 parent: RECORD-I-0009
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
