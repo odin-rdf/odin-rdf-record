@@ -4,14 +4,14 @@ level: task
 title: "The tree as a package structure: btree.odin promoted from the prototype, with its own suite and no wiring"
 short_code: "RECORD-T-0040"
 created_at: 2026-09-04T18:57:16.691212+00:00
-updated_at: 2026-09-04T19:05:06.867645+00:00
+updated_at: 2026-09-04T19:11:09.664488+00:00
 parent: RECORD-I-0009
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false

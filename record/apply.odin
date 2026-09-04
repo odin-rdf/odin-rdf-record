@@ -164,7 +164,10 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 	}
 	head, herr := store_latest(s)
 	assert(herr == .None, "apply: a store that never published — store_open publishes before it returns")
-	defer snapshot_release(&head)
+	head_released := false
+	defer if !head_released {
+		snapshot_release(&head)
+	}
 	assert(u32(head.idx.epoch) == s.n_epochs, "apply: the published epoch is not the store's last")
 	if head.idx.epoch >= LIVE_EPOCH-1 {
 		return 0, conforms, {.Epoch_Exhausted, -1}
@@ -276,7 +279,17 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 	}
 	wall := u64(time.to_unix_nanoseconds(time.now()))
 	epoch_append(s, Epoch_Meta{wall = wall, actor = actor, reason = reason})
-	store_build_permutations(s)
+	// The permutations: a commit's asserts are inserted into the
+	// published trees under this epoch's generation — a leaf and its
+	// ancestors copied per order, microseconds — unless there are
+	// enough of them that the boot path's sort-and-pack is cheaper
+	// (RECORD-A-0012 decision 5, INSERT_SORT_THRESHOLD). Retracts touch
+	// no index either way.
+	if n_asserts > INSERT_SORT_THRESHOLD {
+		store_build_permutations(s)
+	} else {
+		store_insert_permutations(s, head.idx.ord, appended)
+	}
 	store_merge_term_index(s, head.idx.terms)
 	candidate := build_index_set(s)
 	assert(candidate.epoch == E, "apply: the candidate set is not at the new epoch")
@@ -317,8 +330,14 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 		return 0, conforms, {.Writer, -1}
 	}
 
-	// Publish — the visibility boundary.
+	// Publish — the visibility boundary. Then this apply's own head
+	// reference goes, so a superseded set nobody else holds dies here
+	// and its nodes are drained within the commit rather than at the
+	// next one.
 	install_index_set(s, candidate)
+	snapshot_release(&head)
+	head_released = true
+	store_drain_retired(s)
 	return E, conforms, {}
 }
 

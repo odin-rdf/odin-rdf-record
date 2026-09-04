@@ -798,15 +798,16 @@ test_scale_bulk_apply :: proc(t: ^testing.T) {
 // human-paced commit at ISMS scale — the bulk corpus loaded first, then
 // small changesets (an assert and a retract each) applied one at a
 // time on the memory seam, each timed. Per commit the store pays the
-// intern and the preconditions (microseconds), the six-permutation
-// rebuild over 4×10⁵ facts (RECORD-A-0005's flat copy-on-write — the
-// 45–57 ms baseline), the term-index merge, the set's list copies, and
+// intern and the preconditions (microseconds), the permutation inserts
+// — a leaf and its ancestors copied per order (RECORD-A-0012,
+// RECORD-T-0042; the seven-order re-sort this replaced was 37 ms of a
+// 37.5 ms commit), the term-index merge, the set's list copies, and
 // the encode; no fsync, which on the production seam adds the disk's
 // own figure. The resident footprint is taken after the bulk load with
 // a tracking allocator as the store's (true bytes, as T-0012 did), and
 // the allocator's peak over the commits is the transient cost of one
-// rebuild. Not run as 2×10⁵ commits: at ~50 ms each that is hours, and
-// the number is per commit, not per corpus.
+// commit. The arena's fill after the commits is logged for the ADR's
+// drift trigger.
 // Guarded: the scale measurement is meaningless in a debug build and
 // asserts against wall-clock budgets. `make test` compiles it in a
 // second, optimized pass -- see the Makefile (RECORD-T-0034).
@@ -873,8 +874,11 @@ test_scale_commit_latency :: proc(t: ^testing.T) {
 		sum += x
 	}
 	peak := int(track.peak_memory_allocated) - base
-	log.infof("commit latency at %d facts, %d commits of 1–2 ops on the memory seam: min %.1f ms, mean %.1f ms, max %.1f ms; transient per commit up to %.1f MB over the %.1f MB resident", s.n_facts, N, lo, sum/N, hi, mb(peak), mb(resident))
+	leaves, inners, live_b := perm_arena_live(&s.perm)
+	log.infof("commit latency at %d facts, %d commits of 1–2 ops on the memory seam: min %.2f ms, mean %.2f ms, max %.2f ms; transient per commit up to %.2f MB over the %.1f MB resident; permutations %.2f MB live in %d leaves (%.0f%% fill) + %d inners",
+		s.n_facts, N, lo, sum/N, hi, mb(peak), mb(resident), mb(live_b), leaves, 100 * f64(len(Order) * int(s.n_facts)) / f64(leaves * PERM_LEAF_CAP), inners)
 	testing.expect(t, hi < 1000, "a commit stays well inside a second")
+	testing.expect(t, sum/N < 5, "a commit's mean is milliseconds, not the re-sort's tens (RECORD-T-0042)")
 }
 
 }

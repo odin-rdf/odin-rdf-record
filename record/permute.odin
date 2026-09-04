@@ -206,3 +206,40 @@ store_build_permutations :: proc(s: ^Store) {
 	}
 	s.ord_built = true
 }
+
+// INSERT_SORT_THRESHOLD is the assert count above which apply rebuilds
+// by sort-and-pack instead of inserting (RECORD-A-0012 decision 5).
+// Measured 2026-09-04 (btree_bench_test.odin, arm64 darwin, -o:speed,
+// 4×10⁵ facts): inserting costs ~4.7 µs per assert across the seven
+// orders (475 µs for k=100) and sort-and-pack 44 ms, so the two meet
+// near 9,000 asserts — about 2% of the table. The constant sits under
+// that; a changeset this large is a bulk load, and the pack's full
+// leaves are the better result for it anyway. Re-measure on the
+// production machine (the ADR's review trigger).
+@(private)
+INSERT_SORT_THRESHOLD :: 8192
+
+// store_insert_permutations brings every order up to date with the
+// facts `ids` appended since `base` published — the commit path
+// (RECORD-T-0042). Each order starts from the published root and
+// inserts under generation n_epochs, the epoch being committed, so
+// the nodes it passes are copied and the published set is never
+// written (btree.odin). An order no insert reached keeps its root and
+// the new set retains it, per perm_insert's ownership contract. The
+// roots are the store's until build_index_set moves them into a set.
+@(private)
+store_insert_permutations :: proc(s: ^Store, base: [Order]Perm_Root, ids: []Fact_ID) {
+	assert(!s.ord_built, "store_insert_permutations: an unpublished build is still held")
+	facts := s.facts[:]
+	for o in Order {
+		tr := Perm_Tree{arena = &s.perm, key = order_key(o), gen = u32(s.n_epochs), root = base[o]}
+		for id in ids {
+			perm_insert(&tr, facts, id)
+		}
+		if tr.root.node == base[o].node && tr.root.level == base[o].level {
+			perm_root_retain(&s.perm, tr.root)
+		}
+		s.ord[o] = tr.root
+	}
+	s.ord_built = true
+}

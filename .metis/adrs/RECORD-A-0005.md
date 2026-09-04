@@ -127,5 +127,12 @@ constants it says must be measured.
   > deferred**. It would fire at sustained rates above ~10 commits/s, or
   > if a consumer's commit path turned out latency-bound at tens of
   > milliseconds; neither is on any plan.
+  > **Re-read 2026-09-04 (RECORD-I-0009, RECORD-A-0012).** The 31–35 ms was
+  > not the copy this ADR priced but the boot path's full radix re-sort run
+  > on every commit — 37.1 ms of a 37.5 ms apply at 4×10⁵ facts, with 20 MB
+  > transient. The trigger fired on the application's interactive commit
+  > rate, and the answer was not the delta structure: part 3 is superseded
+  > by `RECORD-A-0012`, a copy-on-write B+tree of fact ids, and
+  > `RECORD-T-0042` carries the new commit number.
 - Any second writer ever being contemplated (it is forbidden by
   `log.md` §10; this ADR's simplicity is part of why).

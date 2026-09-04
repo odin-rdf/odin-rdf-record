@@ -706,10 +706,9 @@ test_xbench_apply_breakdown :: proc(t: ^testing.T) {
 		set += time.tick_since(start)
 		release_set(&s, cand)
 	}
-	// build_index_set moved the arrays out; rebuild so the store is
-	// whole again (apply rebuilds anyway).
-	store_build_permutations(&s)
-	store_merge_term_index(&s, s.idx.terms)
+	// build_index_set moved the roots and the term index out of the
+	// store; apply rebuilds both from the published set, so nothing is
+	// owed here.
 	log.infof("apply pieces at %d facts, %d terms: permutations %.1f ms, term-index merge %.1f ms, index-set build %.2f ms (means of %d)",
 		s.n_facts, len(s.dict.off), ms(perm) / R, ms(terms) / R, ms(set) / R, R)
 

@@ -289,13 +289,19 @@ test_apply_rollback_exact :: proc(t: ^testing.T) {
 		op(.Assert, alice, knows, bob),
 	}
 	// The commit's first operation is the append, the second the fsync:
-	// let the append through and fail the fsync.
+	// let the append through and fail the fsync. The permutation arena
+	// must come back to its live count too (RECORD-T-0042): the
+	// candidate's roots are retired on release and drained by rollback.
+	leaves_before, inners_before, _ := perm_arena_live(&a.perm)
 	a_fs.budget = a_fs.used + 1
 	_, _, err := apply(&a, {ops = failing[:]})
 	testing.expect_value(t, err, Apply_Error{.Writer, -1})
 	testing.expect_value(t, a.write_err, Writer_Error.IO_Sync)
 	testing.expect(t, a.writer.failed, "the writer is fail-stop")
 	same_projection(t, &a, &b, walls = false)
+	leaves_after, inners_after, _ := perm_arena_live(&a.perm)
+	testing.expect_value(t, leaves_after, leaves_before)
+	testing.expect_value(t, inners_after, inners_before)
 	testing.expect(t, at_exists(&a, 3, op(.Assert, alice, knows, bob)), "the retracted-then-rolled-back quad is live again")
 
 	// Fail-stop: nothing more is accepted on A; B continues.
@@ -1097,5 +1103,113 @@ test_rdf12_untouched_list :: proc(t: ^testing.T) {
 			testing.expect(t, string(prev) <= string(enc), "the term index is sorted by encoding")
 		}
 		prev = enc
+	}
+}
+
+// --- the commit path's two permutation paths (RECORD-T-0042) ----------
+
+// perm_sorted_over asserts a root is a permutation of every fact,
+// strictly ascending under its order's key — the sortedness oracle the
+// permute suite uses, applied to whatever path built the root.
+@(private = "file")
+perm_sorted_over :: proc(t: ^testing.T, s: ^Store, o: Order, loc := #caller_location) {
+	ids := perm_collect(&s.perm, s.idx.ord[o])
+	defer delete(ids)
+	testing.expect_value(t, u32(len(ids)), s.n_facts, loc = loc)
+	key := order_key(o)
+	facts := s.facts[:]
+	for i in 1 ..< len(ids) {
+		if !perm_key_less(perm_key_of(facts, key, ids[i-1]), perm_key_of(facts, key, ids[i])) {
+			testing.expectf(t, false, "%v out of order at %d", o, i, loc = loc)
+			return
+		}
+	}
+}
+
+@(test)
+test_apply_permutation_paths :: proc(t: ^testing.T) {
+	fs: Mem_FS
+	defer mem_fs_destroy(&fs)
+	s: Store
+	at_open(t, &s, mem_file_ops(&fs))
+	defer store_close(&s)
+
+	knows := iri("http://ex/knows")
+	owned := make([dynamic]string)
+	defer {
+		for str in owned {
+			delete(str)
+		}
+		delete(owned)
+	}
+	name :: proc(owned: ^[dynamic]string, i: int) -> rdf.Term {
+		str := fmt.aprintf("http://ex/n%05d", i)
+		append(owned, str)
+		return rdf.IRI(str)
+	}
+
+	// Above the threshold: the sort-and-pack path. Every order packed
+	// full — leaves exactly ceil(n / cap) — and sorted.
+	N := INSERT_SORT_THRESHOLD + 1
+	bulk := make([]Op, N)
+	defer delete(bulk)
+	for i in 0 ..< N {
+		bulk[i] = op(.Assert, name(&owned, i), knows, name(&owned, (i * 7) % N))
+	}
+	at_ok(t, &s, bulk)
+	leaves, _, _ := perm_arena_live(&s.perm)
+	testing.expect_value(t, leaves, len(Order) * ((N + PERM_LEAF_CAP - 1) / PERM_LEAF_CAP))
+	for o in Order {
+		perm_sorted_over(t, &s, o)
+	}
+
+	// Below it: the insert path. Three asserts copy a leaf (and split
+	// full ones) per order; sorted still; the previous set's nodes are
+	// gone once it is released, since no reader held it.
+	small := [3]Op{
+		op(.Assert, name(&owned, 3), knows, name(&owned, 4)),
+		op(.Assert, name(&owned, 3), knows, name(&owned, 5)),
+		op(.Assert, name(&owned, 3), knows, name(&owned, 6)),
+	}
+	at_ok(t, &s, small[:])
+	for o in Order {
+		perm_sorted_over(t, &s, o)
+	}
+
+	// A retract-only changeset: no node is allocated or freed — every
+	// order's root is shared with the superseded set and retained.
+	before, _, _ := perm_arena_live(&s.perm)
+	roots := s.idx.ord
+	retract := [1]Op{op(.Retract, name(&owned, 3), knows, name(&owned, 4))}
+	at_ok(t, &s, retract[:])
+	after, _, _ := perm_arena_live(&s.perm)
+	testing.expect_value(t, after, before)
+	testing.expect_value(t, s.idx.ord, roots)
+
+	// Re-asserting a retracted quad: two generations, both indexed, the
+	// newer ordered after the older by fact id; at the latest epoch only
+	// the newer is visible, at the epoch before only the older.
+	again := [1]Op{op(.Assert, name(&owned, 3), knows, name(&owned, 4))}
+	e := at_ok(t, &s, again[:])
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+	sid, _ := snapshot_resolve(snap, name(&owned, 3))
+	pid, _ := snapshot_resolve(snap, knows)
+	oid, _ := snapshot_resolve(snap, name(&owned, 4))
+	r := snapshot_match(snap, {s = sid, p = pid, o = oid})
+	testing.expect_value(t, range_len(r), 2)
+	sc := range_iter(r, {origin = .Any, scope = .All})
+	newer, ok := scan_next(&sc)
+	testing.expect(t, ok, "the re-asserted generation is visible")
+	testing.expect_value(t, snapshot_fact(snap, newer).assert, e)
+	_, more := scan_next(&sc)
+	testing.expect(t, !more, "the retracted generation is not")
+	older, _ := store_at(&s, e - 2)
+	defer snapshot_release(&older)
+	osc := range_iter(snapshot_match(older, {s = sid, p = pid, o = oid}), {origin = .Any, scope = .All})
+	old_id, ook := scan_next(&osc)
+	testing.expect(t, ook && old_id < newer, "before the retract, the older generation, with the lower id")
+	for o in Order {
+		perm_sorted_over(t, &s, o)
 	}
 }
