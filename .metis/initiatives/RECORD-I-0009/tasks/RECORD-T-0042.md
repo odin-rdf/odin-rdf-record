@@ -4,14 +4,14 @@ level: task
 title: "The commit path inserts: the threshold, rollback, and RECORD-T-0018's number re-measured"
 short_code: "RECORD-T-0042"
 created_at: 2026-09-04T18:57:19.724917+00:00
-updated_at: 2026-09-04T19:18:37.380208+00:00
+updated_at: 2026-09-04T19:23:13.082098+00:00
 parent: RECORD-I-0009
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
