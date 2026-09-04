@@ -4,14 +4,14 @@ level: task
 title: "Documents and v0.8.0: api.md, RECORD-A-0005 superseded, the family file, and both engines walked"
 short_code: "RECORD-T-0043"
 created_at: 2026-09-04T18:57:21.125104+00:00
-updated_at: 2026-09-04T19:24:17.197773+00:00
+updated_at: 2026-09-04T19:31:41.367084+00:00
 parent: RECORD-I-0009
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/active"
+  - "#phase/completed"
 
 
 exit_criteria_met: false
