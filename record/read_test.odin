@@ -663,3 +663,58 @@ test_read_bytes_and_term :: proc(t: ^testing.T) {
 	testing.expect(t, !past_ok, "an id past the snapshot is unknown")
 }
 
+
+// scan_next's output is in the named order, fact id breaking ties,
+// for every order and any prefix — odin-rdf-sparql's merge join
+// (SPARQL-T-0029) walks two such scans in step and depends on it. Over
+// the permute suite's duplicate-heavy corpus, where a tree that lost
+// the order would lose it among adjacent ties (RECORD-T-0041).
+@(test)
+test_read_ordered_output :: proc(t: ^testing.T) {
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	oracle_fill(&s, 0x0DE4)
+	epoch_append(&s, {})
+	store_build_permutations(&s)
+	store_build_term_index(&s)
+	store_publish(&s)
+	snap, serr := store_latest(&s)
+	testing.expect_value(t, serr, Snapshot_Error.None)
+	defer snapshot_release(&snap)
+
+	neg, _ := inline_integer(-1)
+	patterns := [?]Pattern{
+		{},
+		{s = 1},
+		{p = 4},
+		{o = resident_id(neg)},
+		{g = MATCH_DEFAULT_GRAPH},
+		{g = 2},
+		{s = 2, p = 5},
+		{p = 4, o = 3},
+		{g = 1, p = 5},
+	}
+	f := Filter{origin = .Any, scope = .All}
+	for o in Order {
+		key := order_key(o)
+		for p in patterns {
+			r := snapshot_match_as(snap, p, o)
+			sc := range_iter(r, f)
+			want := oracle_collect(snap, p, f)
+			defer delete(want)
+			n := 0
+			prev: Perm_Key
+			for id in scan_next(&sc) {
+				k := perm_key_of(snap.idx.facts, key, id)
+				if n > 0 && !perm_key_less(prev, k) {
+					testing.expectf(t, false, "%v %v: out of order at %d", o, p, n)
+					return
+				}
+				prev = k
+				n += 1
+			}
+			testing.expect_value(t, n, len(want))
+		}
+	}
+}

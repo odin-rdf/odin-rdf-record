@@ -432,7 +432,8 @@ test_scale_resident_build :: proc(t: ^testing.T) {
 	store_build_permutations(&s)
 	sort_ms := time.duration_milliseconds(time.tick_since(start))
 	for o in Order {
-		ids := s.ord[o]
+		ids := perm_collect(&s.perm, s.ord[o])
+		defer delete(ids)
 		testing.expect_value(t, u32(len(ids)), s.n_facts)
 		key := order_key(o)
 		for i in 1 ..< len(ids) {
@@ -561,10 +562,7 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	// the term index and the offsets (4 bytes per term each) plus the
 	// chunk lists, which are headers.
 	fact_b := len(s.facts) * FACT_CHUNK_SIZE * size_of(Fact)
-	perm_b := 0
-	for o in Order {
-		perm_b += len(s.idx.ord[o]) * size_of(u32)
-	}
+	_, _, perm_b := perm_arena_live(&s.perm)
 	set_b := len(s.idx.terms)*size_of(u32) + len(s.idx.off)*size_of(u32) + len(s.idx.used)*size_of(u32)
 	set_b += len(s.idx.facts)*size_of([]Fact) + len(s.idx.dict)*size_of([]byte) + len(s.idx.epochs)*size_of([]Epoch_Meta)
 	epoch_b := len(s.epochs) * EPOCH_CHUNK_SIZE * size_of(Epoch_Meta)
@@ -611,7 +609,7 @@ measure_boot :: proc(t: ^testing.T, name: string, dir: string, epochs: int) {
 	store_build_term_index(&s2)
 	index_ms := time.duration_milliseconds(time.tick_since(start))
 	store_publish(&s2)
-	log.infof("%s boot phases: recover+replay+build %.0f ms, permutation sort %.0f ms, term index %.0f ms", name, load_ms, sort_ms, index_ms)
+	log.infof("%s boot phases: recover+replay+build %.0f ms, permutation sort+pack %.0f ms, term index %.0f ms", name, load_ms, sort_ms, index_ms)
 }
 
 // Guarded: the scale measurement is meaningless in a debug build and
@@ -834,10 +832,7 @@ test_scale_commit_latency :: proc(t: ^testing.T) {
 	resident := int(track.current_memory_allocated)
 	mb :: proc(n: int) -> f64 {return f64(n) / (1024 * 1024)}
 	set_b := len(s.idx.terms)*size_of(u32) + len(s.idx.off)*size_of(u32)
-	perm_b := 0
-	for o in Order {
-		perm_b += len(s.idx.ord[o]) * size_of(u32)
-	}
+	_, _, perm_b := perm_arena_live(&s.perm)
 	arena_b := 0
 	for c in s.dict.chunks {
 		arena_b += len(c)

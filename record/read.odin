@@ -1,8 +1,9 @@
 // The read API (RECORD-T-0010): api.md par. 12's layer 1 and its
 // resolution procedures, on the snapshot layer 0 ships — Match as one
-// binary-searched prefix range over one permutation, Iter streaming
-// facts through the filter set, Resolve with the cheap miss, and term
-// materialization over the arena and the codec. This is the surface
+// prefix window over one permutation tree, two rank descents wide
+// (RECORD-A-0012), Iter streaming facts through the filter set,
+// Resolve with the cheap miss, and term materialization over the arena
+// and the codec. This is the surface
 // odin-rdf-sparql and odin-rdf-shacl eventually target; nothing here
 // materializes a result set, and nothing reaches past a snapshot.
 //
@@ -72,36 +73,33 @@ Filter :: struct {
 	graphs: []Term_ID, // read under .Set only
 }
 
-// Range is what Match returns: a window into one permutation, the
-// order it is in, and the pattern the prefix could not express — a
-// view, not a container; nothing is copied and range_len is
-// arithmetic. `delta` is the second run of RECORD-A-0005's promised
-// shape and is permanently empty until Apply's delta structure lands;
-// it is carried so that adopting deltas changes the scan's internals
-// and nothing downstream.
+// Range is what Match returns: a window into one permutation as two
+// ranks, the order it is in, and the pattern the prefix could not
+// express — a view, not a container; nothing is copied and range_len
+// is arithmetic. (RECORD-A-0005 had promised a second `delta` run here
+// for a structure never built; RECORD-A-0012 replaced the structure
+// instead, and no consumer had named the field.)
 Range :: struct {
 	snap:     Snapshot,
 	order:    Order,
-	main:     []Fact_ID,
-	delta:    []Fact_ID,
+	lo, hi:   int,
 	residual: Pattern,
 }
 
 // range_len is the candidate count: an exact count of every fact
 // generation in the window, and therefore an exact upper bound on
 // visible matches at any epoch — what a join planner prices with
-// (api.md par. 12.4). O(1) here; the binary searches were paid in
-// Match.
+// (api.md par. 12.4). O(1) here; the descents were paid in Match.
 range_len :: proc(r: Range) -> int {
-	return len(r.main) + len(r.delta)
+	return r.hi - r.lo
 }
 
 // Scan streams a range through the filters. Concrete, not an
-// interface: the hot path is a bounds check, one gather into the fact
+// interface: the hot path is a cursor step, one gather into the fact
 // table, and register compares (api.md par. 12.3's stated shape).
 Scan :: struct {
 	snap:    Snapshot,
-	ids:     []Fact_ID, // the unconsumed window
+	cur:     Perm_Cursor, // the unconsumed window
 	origin:  Origin,
 	graphs:  []Term_ID, // the set to require membership of, when scoped
 	s, p, o: Term_ID, // residual component checks; 0 = not checked
@@ -116,7 +114,7 @@ Scan :: struct {
 // GPOS, chosen only when G is bound, S is not, and O is not bound
 // without P (RECORD-T-0028, on RECORD-A-0004's own review trigger);
 // everywhere else a bound graph is residual — one comparison against
-// a field the visibility test already loaded. Two binary searches per
+// a field the visibility test already loaded. Two rank descents per
 // bound prefix; a pattern this snapshot's terms cannot satisfy simply
 // finds an empty window.
 snapshot_match :: proc(snap: Snapshot, p: Pattern) -> Range {
@@ -146,10 +144,10 @@ snapshot_match_as :: proc(snap: Snapshot, p: Pattern, order: Order) -> Range {
 		// store, and the bound test above needed the spelling.
 		want[k] = 0 if key[k] == .G && v == MATCH_DEFAULT_GRAPH else v
 	}
-	ids := snap.idx.ord[order]
-	lo := prefix_bound(snap.idx, ids, key, want, k, false)
-	hi := prefix_bound(snap.idx, ids, key, want, k, true)
-	return Range{snap = snap, order = order, main = ids[lo:hi], residual = p}
+	set := snap.idx
+	lo := perm_rank(set.leaves, set.inners, set.facts, key, set.ord[order], want, k, false)
+	hi := perm_rank(set.leaves, set.inners, set.facts, key, set.ord[order], want, k, true)
+	return Range{snap = snap, order = order, lo = lo, hi = hi, residual = p}
 }
 
 // range_iter binds the filter set and returns the scan. Origin and
@@ -165,10 +163,10 @@ range_iter :: proc(r: Range, f: Filter) -> Scan {
 	assert(f.origin >= .Asserted && f.origin <= .Any, "range_iter: origin must be stated (api.md par. 12.5)")
 	assert(f.scope == .All || f.scope == .Set, "range_iter: graph scope must be stated (RECORD-T-0029)")
 	assert(f.scope == .Set || len(f.graphs) == 0, "range_iter: scope .All with a graph set — say .Set")
-	assert(len(r.delta) == 0, "range_iter: the delta run arrives with Apply")
+	set := r.snap.idx
 	sc := Scan{
 		snap   = r.snap,
-		ids    = r.main,
+		cur    = perm_cursor(set.leaves, set.inners, set.ord[r.order], r.lo, r.hi),
 		origin = f.origin,
 		graphs = f.graphs,
 		scoped = f.scope == .Set,
@@ -189,9 +187,11 @@ range_iter :: proc(r: Range, f: Filter) -> Scan {
 // a mutation a reader misses is invisible by monotonicity), the
 // residual components, origin, and the graph set. False ends the scan.
 scan_next :: proc(sc: ^Scan) -> (id: Fact_ID, ok: bool) {
-	candidates: for len(sc.ids) > 0 {
-		id = sc.ids[0]
-		sc.ids = sc.ids[1:]
+	candidates: for {
+		ok = false
+		if id, ok = perm_next(&sc.cur); !ok {
+			break
+		}
 		f := fact_in(sc.snap.idx.facts, id)
 		retract := sync.atomic_load_explicit(&f.retract, .Relaxed)
 		if !(f.assert <= sc.snap.epoch && sc.snap.epoch < retract) {
@@ -479,32 +479,6 @@ pattern_component :: proc(p: Pattern, c: Component) -> Term_ID {
 		return p.g
 	}
 	unreachable()
-}
-
-// prefix_bound binary-searches one permutation for the edge of the
-// prefix window: the first index whose fact compares >= the wanted
-// prefix (upper false), or > it (upper true).
-@(private = "file")
-prefix_bound :: proc(set: ^Index_Set, ids: []Fact_ID, key: [4]Component, want: [4]Term_ID, k: int, upper: bool) -> int {
-	lo, hi := 0, len(ids)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		f := fact_in(set.facts, ids[mid])
-		cmp := 0
-		for j in 0 ..< k {
-			v := fact_component(f, key[j])
-			if v != want[j] {
-				cmp = -1 if v < want[j] else 1
-				break
-			}
-		}
-		if cmp < 0 || (upper && cmp == 0) {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo
 }
 
 // --- resolution helpers ----------------------------------------------

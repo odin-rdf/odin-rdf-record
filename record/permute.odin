@@ -1,20 +1,25 @@
-// The seven permutations (RECORD-T-0008, RECORD-T-0028): sorted
-// []FactID views of the fact table — one per order of (S, P, O) with G
-// as the residual tiebreaker (RECORD-A-0004), plus GPOS, the one
-// graph-first order, built when the application's workspace design
-// fired that ADR's review trigger. The type surface enforces the
+// The seven permutations (RECORD-T-0008, RECORD-T-0028): sorted views
+// of the fact table — one per order of (S, P, O) with G as the residual
+// tiebreaker (RECORD-A-0004), plus GPOS, the one graph-first order,
+// built when the application's workspace design fired that ADR's
+// review trigger. Since RECORD-I-0009 (RECORD-A-0012) a permutation's
+// resident shape is a copy-on-write B+tree of Fact_IDs (btree.odin)
+// rather than one flat []Fact_ID: the sort below is unchanged, and its
+// result is packed into a tree instead of kept. The type surface enforces the
 // shape: Order has exactly these seven members; order_key places G at
 // depth 3 in six of them and at depth 0 in one, so "everything in this
 // graph" and "instances of a class in this graph" are prefix windows,
 // and nothing else graph-first can be requested, only wished for.
 //
-// Built once, at the end of replay, by sorting — never by incremental
-// insertion (log.md par. 8's cost argument: seven sorts are tens of
-// milliseconds against an O(n) memmove per insert). Every fact
-// generation is indexed, retracted ones included: visibility at an
-// epoch is the reader's filter, never the index's shape, which is what
-// makes an as-of read a filter change instead of a different index.
-// The permutations are []FactID and nothing else — no keys are copied
+// Built at the end of replay by sorting — never by incremental
+// insertion (log.md par. 8's cost argument, re-measured for the tree
+// in RECORD-A-0012: sort-and-pack is 44 ms where streaming inserts are
+// 568 ms). A commit inserts into the trees instead (RECORD-T-0042);
+// this procedure is the boot path and the large-changeset path. Every
+// fact generation is indexed, retracted ones included: visibility at
+// an epoch is the reader's filter, never the index's shape, which is
+// what makes an as-of read a filter change instead of a different
+// index. The leaves hold FactIDs and nothing else — no keys are copied
 // out of the fact table — the pointer-free property api.md par. 4.1
 // prices across hundreds of tenant processes.
 package record
@@ -118,10 +123,14 @@ radix_pass :: proc(src, dst: []Fact_ID, col: []u32, counts: []u32, shift: uint) 
 }
 
 // store_build_permutations sorts all seven orders over the current fact
-// table — log.md par. 8's buildPermutations, the end of replay. It is
-// also the eventual delta-merge rebuild (api.md par. 5.2): one code
-// path, exercised on every load. Rebuilding replaces each order
-// wholesale; the fact table itself is never reordered.
+// table and packs each into a full tree — log.md par. 8's
+// buildPermutations, the end of replay, and the path a changeset too
+// large to insert takes. Rebuilding replaces each order wholesale: roots
+// the store still owns from an unpublished build are released first,
+// and the new roots are the store's until build_index_set moves them
+// into a set. The fact table itself is never reordered. The trees are
+// built under generation n_epochs — the epoch the set will publish at —
+// so the first later commit copies rather than mutates them.
 //
 // The sort is LSD radix rather than comparison, because this is the
 // hottest procedure on the boot path and every wake from eviction pays
@@ -157,6 +166,14 @@ store_build_permutations :: proc(s: ^Store) {
 			maxs[c] = max(maxs[c], v)
 		}
 	}
+	// Roots of an unpublished build are the store's to release; a
+	// published set's are its own and untouched here.
+	if s.ord_built {
+		for o in Order {
+			perm_root_release(&s.perm, s.ord[o])
+		}
+		s.ord_built = false
+	}
 	buf_a := make([]Fact_ID, n, s.allocator)
 	buf_b := make([]Fact_ID, n, s.allocator)
 	counts := make([]u32, 1 << 16, s.allocator)
@@ -183,9 +200,9 @@ store_build_permutations :: proc(s: ^Store) {
 				}
 			}
 		}
-		ids := make([]Fact_ID, n, s.allocator)
-		copy(ids, cur)
-		delete(s.ord[o], s.allocator)
-		s.ord[o] = ids
+		tr := Perm_Tree{arena = &s.perm, key = key, gen = u32(s.n_epochs)}
+		perm_build(&tr, s.facts[:], cur)
+		s.ord[o] = tr.root
 	}
+	s.ord_built = true
 }

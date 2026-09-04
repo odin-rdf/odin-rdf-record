@@ -48,7 +48,9 @@ test_permutations_exact :: proc(t: ^testing.T) {
 	}
 	for o in Order {
 		w := want[o]
-		testing.expectf(t, slice.equal(s.ord[o], w[:]), "%v: got %v, want %v", o, s.ord[o], w)
+		got := perm_collect(&s.perm, s.ord[o])
+		defer delete(got)
+		testing.expectf(t, slice.equal(got, w[:]), "%v: got %v, want %v", o, got, w)
 	}
 }
 
@@ -59,7 +61,7 @@ test_permutations_empty :: proc(t: ^testing.T) {
 	defer store_destroy(&s)
 	store_build_permutations(&s)
 	for o in Order {
-		testing.expect_value(t, len(s.ord[o]), 0)
+		testing.expect_value(t, s.ord[o].n, u32(0))
 	}
 }
 
@@ -85,8 +87,12 @@ test_permutations_inline_order :: proc(t: ^testing.T) {
 
 	// dict 1 (f1) < true (f3) < -3 (f4) < 4 (f0) < date (f2).
 	want := [5]Fact_ID{1, 3, 4, 0, 2}
-	testing.expectf(t, slice.equal(s.ord[.OSPG], want[:]), "OSPG: got %v, want %v", s.ord[.OSPG], want)
-	testing.expectf(t, slice.equal(s.ord[.OPSG], want[:]), "OPSG: got %v, want %v", s.ord[.OPSG], want)
+	ospg := perm_collect(&s.perm, s.ord[.OSPG])
+	defer delete(ospg)
+	opsg := perm_collect(&s.perm, s.ord[.OPSG])
+	defer delete(opsg)
+	testing.expectf(t, slice.equal(ospg, want[:]), "OSPG: got %v, want %v", ospg, want)
+	testing.expectf(t, slice.equal(opsg, want[:]), "OPSG: got %v, want %v", opsg, want)
 }
 
 // The oracle: an independent lexicographic compare over materialized
@@ -160,7 +166,8 @@ test_permutations_oracle :: proc(t: ^testing.T) {
 	seen := make([]bool, s.n_facts)
 	defer delete(seen)
 	for o in Order {
-		ids := s.ord[o]
+		ids := perm_collect(&s.perm, s.ord[o])
+		defer delete(ids)
 		testing.expect_value(t, u32(len(ids)), s.n_facts)
 
 		// A true permutation: every FactID exactly once.
@@ -190,10 +197,18 @@ test_permutations_oracle :: proc(t: ^testing.T) {
 	oracle_fill(&s2, 0xDA7A_5EED)
 	store_build_permutations(&s2)
 	for o in Order {
-		testing.expect(t, slice.equal(s.ord[o], s2.ord[o]), "same corpus, same permutation")
+		a := perm_collect(&s.perm, s.ord[o])
+		b := perm_collect(&s2.perm, s2.ord[o])
+		testing.expect(t, slice.equal(a, b), "same corpus, same permutation")
+		delete(a)
+		delete(b)
 	}
 	store_build_permutations(&s2)
 	for o in Order {
-		testing.expect(t, slice.equal(s.ord[o], s2.ord[o]), "a rebuild reproduces the order")
+		a := perm_collect(&s.perm, s.ord[o])
+		b := perm_collect(&s2.perm, s2.ord[o])
+		testing.expect(t, slice.equal(a, b), "a rebuild reproduces the order")
+		delete(a)
+		delete(b)
 	}
 }

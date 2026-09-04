@@ -208,7 +208,11 @@ Store :: struct {
 	epochs:    [dynamic][]Epoch_Meta, // EPOCH_CHUNK_SIZE-entry chunks, indexed by epoch-1
 	n_epochs:  u32, // committed epochs; equals the last epoch, since epochs are contiguous from 1
 	notes:     [dynamic]Env_Note, // in log order; last_epoch is non-decreasing
-	ord:       [Order][]Fact_ID, // the seven sorted Fact_ID permutations (permute.odin); moved into an Index_Set on publish
+	ord:       [Order]Perm_Root, // the seven permutation roots as built (permute.odin, btree.odin); moved into an Index_Set on publish
+	ord_built: bool, // ord holds roots the store owns and has not published — released by the next build, a rollback, or destroy
+	perm:      Perm_Arena, // every node of every permutation of every set; the writer's, mutated on this thread alone
+	retired:   [dynamic][Order]Perm_Root, // roots of sets that died — on whichever thread — waiting for the writer to release them (store_drain_retired)
+	retire_mu: sync.Mutex, // guards `retired`; taken when a set dies and when the writer drains, never on the read path
 	terms:     []Term_ID, // the term index — dictionary ids sorted by encoding (termindex.odin); moved into an Index_Set on publish
 	idx:       ^Index_Set, // the published index set (snapshot.odin); nil until the first publish; swapped under mu
 	published: Epoch, // the published epoch (log.md par. 7.1 step 5); stored after idx, under mu
@@ -232,6 +236,8 @@ store_init :: proc(s: ^Store, allocator := context.allocator) {
 	s.dict.chunks = make([dynamic][]byte, allocator)
 	s.dict.used = make([dynamic]u32, allocator)
 	s.dict.off = make([dynamic]u32, allocator)
+	s.retired = make([dynamic][Order]Perm_Root, allocator)
+	perm_arena_init(&s.perm, allocator)
 }
 
 // store_destroy frees everything the projection owns. Views handed out
@@ -247,6 +253,19 @@ store_destroy :: proc(s: ^Store) {
 		assert(s.idx.refs == 1, "store_destroy: a snapshot is still holding the published set")
 		release_set(s, s.idx)
 	}
+	if s.ord_built {
+		for o in Order {
+			perm_root_release(&s.perm, s.ord[o])
+		}
+		s.ord_built = false
+	}
+	store_drain_retired(s)
+	{
+		leaves, inners, _ := perm_arena_live(&s.perm)
+		assert(leaves == 0 && inners == 0, "store_destroy: permutation nodes outlive every set")
+	}
+	perm_arena_destroy(&s.perm)
+	delete(s.retired)
 	for c in s.facts {
 		delete(c, s.allocator)
 	}
@@ -260,9 +279,6 @@ store_destroy :: proc(s: ^Store) {
 		delete(n.payload, s.allocator)
 	}
 	delete(s.notes)
-	for o in Order {
-		delete(s.ord[o], s.allocator)
-	}
 	delete(s.terms, s.allocator)
 	for c in s.dict.chunks {
 		delete(c, s.allocator)

@@ -1,6 +1,7 @@
 package record
 
 import "core:testing"
+import "core:thread"
 
 // The snapshot layer's tests (RECORD-T-0009): the refcount lifecycle
 // is exercised for real — counts observed at every step, a superseded
@@ -36,8 +37,8 @@ test_snapshot_lifecycle :: proc(t: ^testing.T) {
 
 	// Publication moved the permutations into the set.
 	testing.expect_value(t, s.published, Epoch(2))
-	testing.expect_value(t, len(s.ord[.SPOG]), 0)
-	testing.expect_value(t, len(s.idx.ord[.SPOG]), 2)
+	testing.expect(t, !s.ord_built, "the store no longer owns the roots")
+	testing.expect_value(t, s.idx.ord[.SPOG].n, u32(2))
 	testing.expect_value(t, s.idx.refs, 1)
 
 	// Acquire pins; every acquire is one reference.
@@ -188,4 +189,57 @@ test_snapshot_publication_discipline :: proc(t: ^testing.T) {
 
 	snapshot_release(&hist2)
 	snapshot_release(&latest)
+}
+
+// A set that dies on a reader's thread retires its roots for the
+// writer (RECORD-T-0041, RECORD-A-0012): a reader pinned across two
+// publishes releases from a spawned thread; nothing in the arena moves
+// until the writer drains, and then set 1's nodes are gone and the
+// published set's remain.
+@(test)
+test_snapshot_retire_from_reader_thread :: proc(t: ^testing.T) {
+	s: Store
+	store_init(&s)
+	defer store_destroy(&s)
+	fact_append(&s, Fact{s = 1, p = 3, o = 1, assert = 1, retract = LIVE_EPOCH}, false)
+	epoch_append(&s, Epoch_Meta{wall = 1})
+	store_build_permutations(&s)
+	store_build_term_index(&s)
+	store_publish(&s)
+	pinned, perr := store_latest(&s)
+	testing.expect_value(t, perr, Snapshot_Error.None)
+
+	for e in Epoch(2) ..= 3 {
+		fact_append(&s, Fact{s = 1, p = 3, o = Term_ID(e), assert = e, retract = LIVE_EPOCH}, false)
+		epoch_append(&s, Epoch_Meta{wall = u64(e)})
+		store_build_permutations(&s)
+		store_build_term_index(&s)
+		store_publish(&s)
+	}
+	// Set 1 is the pinned reader's alone now; set 2 died on the writer's
+	// thread at the third publish and was drained there.
+	leaves_held, _, _ := perm_arena_live(&s.perm)
+	testing.expect_value(t, leaves_held, 2 * len(Order))
+	testing.expect_value(t, len(s.retired), 0)
+
+	th := thread.create_and_start_with_poly_data(&pinned, proc(p: ^Snapshot) {
+		snapshot_release(p)
+	}, init_context = context)
+	thread.join(th)
+	thread.destroy(th)
+
+	// Retired, not freed: the arena is the writer's.
+	testing.expect_value(t, len(s.retired), 1)
+	leaves_retired, _, _ := perm_arena_live(&s.perm)
+	testing.expect_value(t, leaves_retired, leaves_held)
+
+	store_drain_retired(&s)
+	testing.expect_value(t, len(s.retired), 0)
+	leaves_after, _, _ := perm_arena_live(&s.perm)
+	testing.expect_value(t, leaves_after, len(Order))
+
+	// The published set still answers.
+	snap, _ := store_latest(&s)
+	defer snapshot_release(&snap)
+	testing.expect_value(t, range_len(snapshot_match(snap, {s = 1})), 3)
 }

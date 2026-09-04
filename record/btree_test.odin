@@ -37,9 +37,11 @@ bt_append :: proc(s: ^Store, rng: ^u64, epoch: Epoch = 1) -> Fact_ID {
 	return fact_append(s, f, false)
 }
 
-// bt_collect enumerates a root in order.
-@(private = "file")
-bt_collect :: proc(a: ^Perm_Arena, root: Perm_Root, allocator := context.allocator) -> []Fact_ID {
+// perm_collect enumerates a root in order — the suites' way to look at
+// a permutation now that none is a slice. Package-private: the permute,
+// apply, snapshot and scale suites use it too.
+@(private)
+perm_collect :: proc(a: ^Perm_Arena, root: Perm_Root, allocator := context.allocator) -> []Fact_ID {
 	out := make([]Fact_ID, root.n, allocator)
 	c := perm_cursor(a.leaves[:], a.inners[:], root, 0, int(root.n))
 	i := 0
@@ -128,13 +130,16 @@ bt_oracle_corpus :: proc(t: ^testing.T, s: ^Store) {
 	defer perm_arena_destroy(&a)
 	for o in Order {
 		key := order_key(o)
+		// the store's own build, as the sort produced it
+		sorted := perm_collect(&s.perm, s.ord[o])
+		defer delete(sorted)
 		// packed
 		packed := Perm_Tree{arena = &a, key = key, gen = 1}
-		perm_build(&packed, facts, s.ord[o])
-		testing.expect_value(t, int(packed.root.n), len(s.ord[o]))
+		perm_build(&packed, facts, sorted)
+		testing.expect_value(t, int(packed.root.n), len(sorted))
 		bt_check(t, &a, facts, key, packed.root)
-		got := bt_collect(&a, packed.root)
-		testing.expectf(t, slice.equal(got, s.ord[o]), "%v: packed tree equals the sort", o)
+		got := perm_collect(&a, packed.root)
+		testing.expectf(t, slice.equal(got, sorted), "%v: packed tree equals the sort", o)
 		delete(got)
 		// streamed, in id order — log.md par. 8's alternative, as a
 		// correctness check only
@@ -144,8 +149,8 @@ bt_oracle_corpus :: proc(t: ^testing.T, s: ^Store) {
 			perm_insert(&streamed, facts, Fact_ID(id))
 		}
 		bt_check(t, &a, facts, key, streamed.root)
-		got = bt_collect(&a, streamed.root)
-		testing.expectf(t, slice.equal(got, s.ord[o]), "%v: streamed tree equals the sort", o)
+		got = perm_collect(&a, streamed.root)
+		testing.expectf(t, slice.equal(got, sorted), "%v: streamed tree equals the sort", o)
 		delete(got)
 		perm_root_release(&a, packed.root)
 		perm_root_release(&a, streamed.root)
@@ -191,7 +196,8 @@ test_btree_splits :: proc(t: ^testing.T) {
 	store_build_permutations(&s)
 	facts := s.facts[:]
 	key := order_key(.SPOG)
-	sorted := s.ord[.SPOG]
+	sorted := perm_collect(&s.perm, s.ord[.SPOG])
+	defer delete(sorted)
 	a: Perm_Arena
 	perm_arena_init(&a)
 	defer perm_arena_destroy(&a)
@@ -205,7 +211,7 @@ test_btree_splits :: proc(t: ^testing.T) {
 		testing.expect_value(t, tr.root.level, u8(1))
 		testing.expect_value(t, perm_inner(&a, tr.root.node).n, u32(2))
 		bt_check(t, &a, facts, key, tr.root)
-		got := bt_collect(&a, tr.root)
+		got := perm_collect(&a, tr.root)
 		testing.expect(t, slice.equal(got, sorted[:PERM_LEAF_CAP + 1]))
 		delete(got)
 		perm_root_release(&a, tr.root)
@@ -222,7 +228,7 @@ test_btree_splits :: proc(t: ^testing.T) {
 		testing.expect_value(t, tr.root.level, u8(2))
 		testing.expect_value(t, perm_inner(&a, tr.root.node).n, u32(2))
 		bt_check(t, &a, facts, key, tr.root)
-		got := bt_collect(&a, tr.root)
+		got := perm_collect(&a, tr.root)
 		testing.expect(t, slice.equal(got, sorted[:N + 1]))
 		delete(got)
 		perm_root_release(&a, tr.root)
@@ -246,7 +252,7 @@ test_btree_splits :: proc(t: ^testing.T) {
 		testing.expect_value(t, tr.root.level, u8(2))
 		testing.expect_value(t, perm_inner(&a, tr.root.node).n, u32(3))
 		bt_check(t, &a, facts, key, tr.root)
-		got := bt_collect(&a, tr.root)
+		got := perm_collect(&a, tr.root)
 		testing.expect(t, slice.equal(got, sorted[:N + 1]))
 		delete(got)
 		perm_root_release(&a, tr.root)
@@ -267,7 +273,8 @@ test_btree_cursor :: proc(t: ^testing.T) {
 	}
 	store_build_permutations(&s)
 	facts := s.facts[:]
-	sorted := s.ord[.POSG]
+	sorted := perm_collect(&s.perm, s.ord[.POSG])
+	defer delete(sorted)
 	a: Perm_Arena
 	perm_arena_init(&a)
 	defer perm_arena_destroy(&a)
@@ -350,7 +357,7 @@ test_btree_refcounts :: proc(t: ^testing.T) {
 	store_build_permutations(&s)
 	facts := s.facts[:]
 	key := order_key(.OSPG)
-	base := slice.clone(s.ord[.OSPG])
+	base := perm_collect(&s.perm, s.ord[.OSPG])
 	defer delete(base)
 
 	for release_old_first in ([?]bool{true, false}) {
@@ -379,10 +386,10 @@ test_btree_refcounts :: proc(t: ^testing.T) {
 		perm_root_release(&a, g1.root)
 		bt_check(t, &a, facts, key, held)
 		bt_check(t, &a, facts, key, g2.root)
-		old := bt_collect(&a, held)
+		old := perm_collect(&a, held)
 		testing.expect(t, slice.equal(old, base), "the held set's window is intact")
 		delete(old)
-		new := bt_collect(&a, g2.root)
+		new := perm_collect(&a, g2.root)
 		testing.expect(t, slice.equal(new, exp[:]), "the new set sees the inserts")
 		delete(new)
 		if release_old_first {
@@ -409,7 +416,7 @@ test_btree_refcounts :: proc(t: ^testing.T) {
 		testing.expect_value(t, g2.root.node, g1.root.node)
 		perm_root_retain(&a, g2.root)
 		perm_root_release(&a, g1.root)
-		got := bt_collect(&a, g2.root)
+		got := perm_collect(&a, g2.root)
 		testing.expect(t, slice.equal(got, base))
 		delete(got)
 		perm_root_release(&a, g2.root)
@@ -441,11 +448,13 @@ test_btree_property :: proc(t: ^testing.T) {
 	}
 	held := make([dynamic]Held)
 	defer delete(held)
-	exp := slice.clone_to_dynamic(s.ord[.PSOG])
+	base := perm_collect(&s.perm, s.ord[.PSOG])
+	defer delete(base)
+	exp := slice.clone_to_dynamic(base)
 	defer delete(exp)
 
 	cur := Perm_Tree{arena = &a, key = key, gen = 1}
-	perm_build(&cur, facts, s.ord[.PSOG])
+	perm_build(&cur, facts, base)
 	for gen in u32(2) ..= 200 {
 		k := int(bt_rng(&rng) % 13)
 		next := Perm_Tree{arena = &a, key = key, gen = gen, root = cur.root}
@@ -461,7 +470,7 @@ test_btree_property :: proc(t: ^testing.T) {
 		}
 		perm_root_release(&a, cur.root)
 		cur = next
-		got := bt_collect(&a, cur.root)
+		got := perm_collect(&a, cur.root)
 		if !slice.equal(got, exp[:]) {
 			testing.fail_now(t, "the current root differs from the sorted oracle")
 		}
@@ -477,7 +486,7 @@ test_btree_property :: proc(t: ^testing.T) {
 			if len(held) > 0 {
 				i := int(bt_rng(&rng) % u64(len(held)))
 				h := held[i]
-				at_release := bt_collect(&a, h.root)
+				at_release := perm_collect(&a, h.root)
 				testing.expect(t, slice.equal(at_release, h.exp), "a held root is intact at release")
 				delete(at_release)
 				delete(h.exp)
@@ -486,7 +495,7 @@ test_btree_property :: proc(t: ^testing.T) {
 			}
 		}
 		for h in held {
-			still := bt_collect(&a, h.root)
+			still := perm_collect(&a, h.root)
 			if !slice.equal(still, h.exp) {
 				testing.fail_now(t, "a held root changed under a later generation")
 			}

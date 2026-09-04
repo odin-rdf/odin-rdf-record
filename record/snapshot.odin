@@ -7,16 +7,20 @@
 // # The single-writer / N-reader model, precisely
 //
 // There is exactly one writer (log.md par. 10). It publishes an
-// Index_Set: the seven permutations, the term index, the origin bitset,
-// the high-water marks — and, because this is a language without a
-// collector, its own copies of every list a reader would otherwise
-// have to read from the Store while the writer grows it: the fact
-// chunk list, the dictionary's chunk list, fill counts and offsets,
-// the epoch chunk list (api.md par. 13.8: "every structure a reader
-// touches lives inside indexSet precisely so that one atomic load
-// yields a consistent set"). A reader therefore touches the Store
-// through exactly one kind of memory: chunk payloads, which never move
-// and are never rewritten below the set's bounds. The one field a
+// Index_Set: the seven permutation roots, the term index, the origin
+// bitset, the high-water marks — and, because this is a language
+// without a collector, its own copies of every list a reader would
+// otherwise have to read from the Store while the writer grows it: the
+// fact chunk list, the dictionary's chunk list, fill counts and
+// offsets, the epoch chunk list, and the permutation arena's two node
+// chunk lists (api.md par. 13.8: "every structure a reader touches
+// lives inside indexSet precisely so that one atomic load yields a
+// consistent set"). A reader therefore touches the Store through
+// exactly one kind of memory: chunk payloads, which never move and are
+// never rewritten below the set's bounds — for the permutation arena,
+// never rewritten at all once reachable from a published root
+// (btree.odin's generation rule), and never reused until every set
+// that reached them has died. The one field a
 // reader loads that the writer mutates in place is Fact.retract
 // (api.md par. 2.3), stored and loaded atomically; a reader that
 // misses a just-written retraction computes the same answer, because
@@ -48,15 +52,22 @@
 // (one uncontended acquire), never per match, iterate or resolve; at
 // the workload's ~99:1 read-to-write ratio that is the whole cost.
 //
-// # Reclamation (RECORD-A-0005)
+// # Reclamation (RECORD-A-0005, RECORD-A-0012)
 //
-// An Index_Set owns what publication replaces — the permutation arrays
+// An Index_Set owns what publication replaces — the permutation roots
 // and the term index (moved out of Store.ord and Store.terms by
 // store_publish, which is why a rebuild after publish cannot dangle a
 // published set), its bitset copy, and its list copies — and is freed
 // when its reference count drops to zero: the store holds one
 // reference from publish until it publishes a successor or closes, and
-// every live Snapshot holds one.
+// every live Snapshot holds one. The roots are the one thing a dying
+// set cannot free itself: releasing a root walks the arena's reference
+// counts and free lists, which are the writer's, and the last release
+// may run on a reader's thread. So a set at zero *retires* its seven
+// roots onto Store.retired under retire_mu, and the writer releases
+// them at its next publish, its next apply, or close
+// (store_drain_retired). The lock is taken when a set dies — only ever
+// when a reader outlived a publish — never on the read path.
 package record
 
 import "core:slice"
@@ -79,7 +90,9 @@ Snapshot_Error :: enum {
 // chunk lists, taken at publication (package comment).
 @(private)
 Index_Set :: struct {
-	ord:     [Order][]Fact_ID, // the seven sorted FactID permutations
+	ord:     [Order]Perm_Root, // the seven permutation roots (btree.odin), one reference each
+	leaves:  [][]Perm_Leaf, // the permutation arena's leaf chunk list at publication
+	inners:  [][]Perm_Inner, // its inner chunk list at publication
 	terms:   []Term_ID, // the term index: dictionary ids sorted by encoding (termindex.odin)
 	derived: []u64, // the origin bitset at publication
 	facts:   [][]Fact, // the fact chunk list at publication
@@ -130,11 +143,14 @@ store_publish :: proc(s: ^Store) {
 @(private)
 build_index_set :: proc(s: ^Store) -> ^Index_Set {
 	set := new(Index_Set, s.allocator)
+	assert(s.ord_built, "store_publish: permutations not built")
 	for o in Order {
-		assert(len(s.ord[o]) == int(s.n_facts), "store_publish: permutations not built over the current facts")
+		assert(s.ord[o].n == s.n_facts, "store_publish: permutations not built over the current facts")
 		set.ord[o] = s.ord[o]
-		s.ord[o] = nil
 	}
+	s.ord_built = false
+	set.leaves = slice.clone(s.perm.leaves[:], s.allocator)
+	set.inners = slice.clone(s.perm.inners[:], s.allocator)
 	assert(len(s.terms) == len(s.dict.off), "store_publish: the term index not built over the current dictionary")
 	set.terms = s.terms
 	s.terms = nil
@@ -163,6 +179,27 @@ install_index_set :: proc(s: ^Store, set: ^Index_Set) {
 	sync.mutex_unlock(&s.mu)
 	if old != nil {
 		release_set(s, old)
+	}
+	store_drain_retired(s)
+}
+
+// store_drain_retired releases the roots of every set that has died
+// since the last drain — the writer's half of reclamation (package
+// comment). Called on the writer's thread only: after a publish, at the
+// top of apply, and by store_destroy.
+@(private)
+store_drain_retired :: proc(s: ^Store) {
+	for {
+		sync.mutex_lock(&s.retire_mu)
+		if len(s.retired) == 0 {
+			sync.mutex_unlock(&s.retire_mu)
+			return
+		}
+		roots := pop(&s.retired)
+		sync.mutex_unlock(&s.retire_mu)
+		for o in Order {
+			perm_root_release(&s.perm, roots[o])
+		}
 	}
 }
 
@@ -275,15 +312,19 @@ set_bytes :: proc(set: ^Index_Set, id: Term_ID) -> []byte {
 }
 
 // release_set decrements and frees on zero — shared by snapshot
-// release, the store's publish-supersede path, and store_destroy.
+// release, the store's publish-supersede path, and store_destroy. The
+// permutation roots are retired for the writer rather than released
+// here (package comment).
 @(private)
 release_set :: proc(s: ^Store, set: ^Index_Set) {
 	old := sync.atomic_sub_explicit(&set.refs, 1, .Acq_Rel)
 	assert(old >= 1, "release_set: a reference count underflow")
 	if old == 1 {
-		for o in Order {
-			delete(set.ord[o], s.allocator)
-		}
+		sync.mutex_lock(&s.retire_mu)
+		append(&s.retired, set.ord)
+		sync.mutex_unlock(&s.retire_mu)
+		delete(set.leaves, s.allocator)
+		delete(set.inners, s.allocator)
 		delete(set.terms, s.allocator)
 		delete(set.derived, s.allocator)
 		delete(set.facts, s.allocator)

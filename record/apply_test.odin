@@ -110,7 +110,11 @@ same_projection :: proc(t: ^testing.T, a, b: ^Store, walls := true, loc := #call
 	testing.expect_value(t, a.idx.n_terms, b.idx.n_terms, loc = loc)
 	testing.expect(t, slice.equal(a.idx.terms, b.idx.terms), "term indexes agree", loc = loc)
 	for o in Order {
-		testing.expect(t, slice.equal(a.idx.ord[o], b.idx.ord[o]), "permutations agree", loc = loc)
+		pa := perm_collect(&a.perm, a.idx.ord[o])
+		pb := perm_collect(&b.perm, b.idx.ord[o])
+		testing.expect(t, slice.equal(pa, pb), "permutations agree", loc = loc)
+		delete(pa)
+		delete(pb)
 	}
 }
 
@@ -1065,7 +1069,7 @@ test_rdf12_untouched_list :: proc(t: ^testing.T) {
 	// orders among them like any other — no order knows what it holds.
 	tt_id, _ := snapshot_resolve(snap, &tt)
 	for o in Order {
-		testing.expect_value(t, len(snap.idx.ord[o]), 3)
+		testing.expect_value(t, snap.idx.ord[o].n, u32(3))
 	}
 
 	// Filter, visibility and the epoch table: origin must still be

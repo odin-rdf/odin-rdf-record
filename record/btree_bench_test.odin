@@ -178,10 +178,63 @@ xb_tree_scan_count :: proc(a: ^Perm_Arena, facts: [][]Fact, root: Perm_Root, lo,
 	return
 }
 
+// The flat array's read path, kept here as the benchmark's reference
+// now that read.odin's is the tree's: prefix_bound as it was, and the
+// scan over the slice with scan_next's per-candidate work.
 @(private = "file")
-xb_flat_scan_count :: proc(snap: Snapshot, p: Pattern) -> (n: int) {
-	sc := range_iter(snapshot_match(snap, p), {origin = .Any, scope = .All})
-	for _ in scan_next(&sc) {
+xb_flat_bound :: proc(facts: [][]Fact, ids: []Fact_ID, key: [4]Component, want: [4]Term_ID, k: int, upper: bool) -> int {
+	lo, hi := 0, len(ids)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		f := fact_in(facts, ids[mid])
+		cmp := 0
+		for j in 0 ..< k {
+			v := fact_component(f, key[j])
+			if v != want[j] {
+				cmp = -1 if v < want[j] else 1
+				break
+			}
+		}
+		if cmp < 0 || (upper && cmp == 0) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
+@(private = "file")
+xb_flat_match :: proc(facts: [][]Fact, flat: [Order][]Fact_ID, p: Pattern) -> (order: Order, ids: []Fact_ID) {
+	order = xb_choose(p)
+	key := order_key(order)
+	want, k := xb_prefix(p, key)
+	lo := xb_flat_bound(facts, flat[order], key, want, k, false)
+	hi := xb_flat_bound(facts, flat[order], key, want, k, true)
+	return order, flat[order][lo:hi]
+}
+
+@(private = "file")
+xb_flat_scan_count :: proc(facts: [][]Fact, flat: [Order][]Fact_ID, epoch: Epoch, p: Pattern) -> (n: int) {
+	_, ids := xb_flat_match(facts, flat, p)
+	g_want := Term_ID(0) if p.g == MATCH_DEFAULT_GRAPH else p.g
+	for id in ids {
+		f := fact_in(facts, id)
+		if !(f.assert <= epoch && epoch < f.retract) {
+			continue
+		}
+		if p.s != 0 && f.s != p.s {
+			continue
+		}
+		if p.p != 0 && f.p != p.p {
+			continue
+		}
+		if p.o != 0 && f.o != p.o {
+			continue
+		}
+		if p.g != 0 && f.g != g_want {
+			continue
+		}
 		n += 1
 	}
 	return
@@ -282,13 +335,13 @@ test_xbench_index :: proc(t: ^testing.T) {
 		store_build_permutations(&s)
 		best = min(best, time.tick_since(start))
 	}
-	log.infof("flat/rebuild: seven radix sorts over %d facts: %.1f ms (best of 3)", s.n_facts, ms(best))
+	log.infof("sort-and-pack: seven radix sorts + packs over %d facts: %.1f ms (best of 3)", s.n_facts, ms(best))
 
 	// Keep a flat copy of every order for the merge experiment, then
 	// publish so the flat read path runs through the real API.
 	flat: [Order][]Fact_ID
 	for o in Order {
-		flat[o] = slice.clone(s.ord[o])
+		flat[o] = perm_collect(&s.perm, s.ord[o])
 	}
 	defer for o in Order {
 		delete(flat[o])
@@ -336,16 +389,19 @@ test_xbench_index :: proc(t: ^testing.T) {
 		for sh in shapes {
 			for _ in 0 ..< 2000 {
 				p := xb_pattern(sh, &vr)
+				fo, fids := xb_flat_match(facts, flat, p)
 				r := snapshot_match(snap, p)
 				o, lo, hi := xb_tree_match(&arena, facts, roots, p)
+				testing.expect_value(t, o, fo)
 				testing.expect_value(t, o, r.order)
-				testing.expect_value(t, hi - lo, range_len(r))
-				if hi - lo != range_len(r) {
+				testing.expect_value(t, hi - lo, len(fids))
+				testing.expect_value(t, range_len(r), len(fids))
+				if hi - lo != len(fids) {
 					return
 				}
 				// same ids in the same order
 				c := perm_cursor(arena.leaves[:], arena.inners[:], roots[o], lo, hi)
-				for id in r.main {
+				for id in fids {
 					got, ok := perm_next(&c)
 					if !ok || got != id {
 						testing.fail_now(t, "tree window differs from the flat window")
@@ -367,7 +423,8 @@ test_xbench_index :: proc(t: ^testing.T) {
 		total_f, total_t := 0, 0
 		start := time.tick_now()
 		for p in pats {
-			total_f += range_len(snapshot_match(snap, p))
+			_, ids := xb_flat_match(facts, flat, p)
+			total_f += len(ids)
 		}
 		flat_d := time.tick_since(start)
 		start = time.tick_now()
@@ -399,7 +456,7 @@ test_xbench_index :: proc(t: ^testing.T) {
 			for _ in 0 ..< reps {
 				p := xb_pattern(sh, &pr)
 				start := time.tick_now()
-				nf += xb_flat_scan_count(snap, p)
+				nf += xb_flat_scan_count(facts, flat, snap.epoch, p)
 				flat_d += time.tick_since(start)
 				start = time.tick_now()
 				o, lo, hi := xb_tree_match(&arena, facts, roots, p)
@@ -729,34 +786,35 @@ test_xbench_boot :: proc(t: ^testing.T) {
 		_, err, _, _ := store_open(&s, dir, ops)
 		open_best = min(open_best, time.tick_since(start))
 		testing.expect_value(t, err, Open_Error.None)
-		// the sort alone, again, over the booted store
+		// sort-and-pack again over the booted store, then the pack alone
+		// from the arrays it produced
 		start = time.tick_now()
 		store_build_permutations(&s)
 		sort_best = min(sort_best, time.tick_since(start))
-		// the pack on top of what boot sorted
+		sorted: [Order][]Fact_ID
+		for o in Order {
+			sorted[o] = perm_collect(&s.perm, s.ord[o])
+		}
 		arena: Perm_Arena
 		perm_arena_init(&arena)
 		start = time.tick_now()
 		roots: [Order]Perm_Root
 		for o in Order {
 			tr := Perm_Tree{arena = &arena, key = order_key(o), gen = 1}
-			perm_build(&tr, s.facts[:], s.ord[o])
+			perm_build(&tr, s.facts[:], sorted[o])
 			roots[o] = tr.root
 		}
 		pack_best = min(pack_best, time.tick_since(start))
 		_, _, bytes = perm_arena_live(&arena)
 		for o in Order {
 			perm_root_release(&arena, roots[o])
+			delete(sorted[o])
 		}
 		perm_arena_destroy(&arena)
-		for o in Order {
-			delete(s.ord[o], s.allocator)
-			s.ord[o] = nil
-		}
 		store_close(&s)
 	}
-	log.infof("awake from disk at %d facts (best of %d): store_open %.0f ms, of which the permutation sort is %.0f ms; tree pack on top %.1f ms at fill %d (%.2f MB) — awake with the tree ≈ %.0f ms",
-		XB_N, R, ms(open_best), ms(sort_best), ms(pack_best), PERM_BUILD_FILL, f64(bytes) / (1024 * 1024), ms(open_best) + ms(pack_best))
+	log.infof("awake from disk at %d facts (best of %d): store_open %.0f ms, of which sort-and-pack is %.0f ms and the pack alone %.1f ms at fill %d (%.2f MB)",
+		XB_N, R, ms(open_best), ms(sort_best), ms(pack_best), PERM_BUILD_FILL, f64(bytes) / (1024 * 1024))
 }
 
 }
@@ -776,21 +834,30 @@ test_xbench_stream_build :: proc(t: ^testing.T) {
 	epoch_append(&s, {})
 	facts := s.facts[:]
 
-	// sort-then-pack, the boot path
+	// sort-then-pack, the boot path (store_build_permutations does both
+	// since RECORD-T-0041; the pack is then re-timed alone)
 	sort_d := time.Duration(max(i64))
 	pack_d := time.Duration(max(i64))
 	packed_bytes := 0
+	sorted: [Order][]Fact_ID
+	defer for o in Order {
+		delete(sorted[o])
+	}
 	for _ in 0 ..< 3 {
 		start := time.tick_now()
 		store_build_permutations(&s)
 		sort_d = min(sort_d, time.tick_since(start))
+		for o in Order {
+			delete(sorted[o])
+			sorted[o] = perm_collect(&s.perm, s.ord[o])
+		}
 		arena: Perm_Arena
 		perm_arena_init(&arena)
 		start = time.tick_now()
 		roots: [Order]Perm_Root
 		for o in Order {
 			tr := Perm_Tree{arena = &arena, key = order_key(o), gen = 1}
-			perm_build(&tr, facts, s.ord[o])
+			perm_build(&tr, facts, sorted[o])
 			roots[o] = tr.root
 		}
 		pack_d = min(pack_d, time.tick_since(start))
@@ -800,8 +867,8 @@ test_xbench_stream_build :: proc(t: ^testing.T) {
 		}
 		perm_arena_destroy(&arena)
 	}
-	log.infof("sort-then-pack: radix sort %.1f ms + pack %.1f ms = %.1f ms; tree %.2f MB, sort scaffolding transient ~%.1f MB",
-		ms(sort_d), ms(pack_d), ms(sort_d) + ms(pack_d), f64(packed_bytes) / (1024 * 1024),
+	log.infof("sort-then-pack: sort-and-pack %.1f ms, of which the pack alone is %.1f ms; tree %.2f MB, sort scaffolding transient ~%.1f MB",
+		ms(sort_d), ms(pack_d), f64(packed_bytes) / (1024 * 1024),
 		f64(4*int(s.n_facts)*4 + 2*int(s.n_facts)*4 + (1 << 16)*4 + 7*int(s.n_facts)*4) / (1024 * 1024))
 
 	// streaming: every fact inserted in id (log) order, one generation
@@ -827,7 +894,7 @@ test_xbench_stream_build :: proc(t: ^testing.T) {
 		// same result as the sort?
 		for o in Order {
 			c := perm_cursor(arena.leaves[:], arena.inners[:], trees[o].root, 0, int(trees[o].root.n))
-			for want in s.ord[o] {
+			for want in sorted[o] {
 				got, ok := perm_next(&c)
 				if !ok || got != want {
 					testing.fail_now(t, "streamed tree differs from the sorted permutation")

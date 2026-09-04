@@ -240,7 +240,10 @@ apply :: proc(s: ^Store, c: Changeset, allocator := context.allocator) -> (epoch
 		}
 	}
 
-	// Mutate, in writer-private state: from here on, one rollback.
+	// Mutate, in writer-private state: from here on, one rollback. The
+	// roots of sets that died since the last publish go first — the
+	// writer's half of reclamation (snapshot.odin).
+	store_drain_retired(s)
 	mark := take_mark(s)
 	touched := make([dynamic]Fact_ID, allocator)
 	defer delete(touched)
@@ -406,7 +409,9 @@ take_mark :: proc(s: ^Store) -> Mark {
 // mark: offsets cut, the last chunk's fill restored, chunks this apply
 // allocated freed. Bytes past the fill are not zeroed; nothing reads
 // them. The permutations and term index were moved into the candidate
-// and die with it. Readers are unaffected throughout: everything
+// and die with it — the candidate's release retires its roots, and the
+// drain here frees them; roots a build left unpublished are released
+// directly. Readers are unaffected throughout: everything
 // touched lies past their sets' bounds, and a reopened interval means
 // the same thing to a reader at or below the published epoch as the
 // closed one did.
@@ -432,10 +437,13 @@ rollback :: proc(s: ^Store, m: Mark, touched: []Fact_ID) {
 		delete(pop(&s.epochs), s.allocator)
 	}
 	s.n_epochs = m.n_epochs
-	for o in Order {
-		delete(s.ord[o], s.allocator)
-		s.ord[o] = nil
+	if s.ord_built {
+		for o in Order {
+			perm_root_release(&s.perm, s.ord[o])
+		}
+		s.ord_built = false
 	}
+	store_drain_retired(s)
 	delete(s.terms, s.allocator)
 	s.terms = nil
 }

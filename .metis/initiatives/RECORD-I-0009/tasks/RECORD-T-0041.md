@@ -4,14 +4,14 @@ level: task
 title: "The set holds roots: Index_Set, boot's pack, Range and Scan over ranks and a cursor, the retire list"
 short_code: "RECORD-T-0041"
 created_at: 2026-09-04T18:57:18.175550+00:00
-updated_at: 2026-09-04T18:57:18.175550+00:00
+updated_at: 2026-09-04T19:11:10.585888+00:00
 parent: RECORD-I-0009
 blocked_by: []
 archived: false
 
 tags:
   - "#task"
-  - "#phase/todo"
+  - "#phase/active"
 
 
 exit_criteria_met: false
@@ -36,33 +36,33 @@ yet — that is `RECORD-T-0042`'s — so this task can be judged on reads alone.
 
 ## Acceptance Criteria
 
-- [ ] `Store.ord` is `[Order]Root` plus one arena; `Index_Set` holds
+- [x] `Store.ord` is `[Order]Root` plus one arena; `Index_Set` holds
       `[Order]Root` and clones of the leaf and inner chunk lists, taken at
       publication as `facts`, `dict`, `used`, `off`, `epochs` are today. A
       reader reaches nodes only through its set's copies.
-- [ ] `store_build_permutations` sorts as before and packs each sorted array
+- [x] `store_build_permutations` sorts as before and packs each sorted array
       into a full tree, releasing whatever roots `s.ord` held (the boot path;
       also the large-changeset path, and `apply`'s only path until T-0042).
-- [ ] `snapshot_match_as` is two rank descents; `range_len` is `hi - lo`;
+- [x] `snapshot_match_as` is two rank descents; `range_len` is `hi - lo`;
       `range_iter` opens a cursor; `scan_next` is unchanged except for where the
       next id comes from; `prefix_bound` is deleted. `Range` and `Scan` lose
       `main`, `delta`, `ids`; `make api` still reports 73 names.
-- [ ] Ordered output of `snapshot_match_as` is asserted by a test over every
+- [x] Ordered output of `snapshot_match_as` is asserted by a test over every
       order, since odin-rdf-sparql's merge join depends on it
       (`SPARQL-T-0029`).
-- [ ] Reclamation off the reader thread: `release_set` at zero pushes the
+- [x] Reclamation off the reader thread: `release_set` at zero pushes the
       seven roots onto `Store.retired` under a mutex distinct from `mu`; the
       writer drains it at the top of `apply` and in `store_destroy`;
       `store_destroy`'s `refs == 1` assertion stands and the arena is empty
       after it. A test holds a snapshot across two publishes, releases it from
       a spawned thread, and checks the arena reaches zero after the next drain.
-- [ ] The six direct-access sites (`permute_test.odin` ×4 via `s.ord[o]`,
+- [x] The six direct-access sites (`permute_test.odin` ×4 via `s.ord[o]`,
       `apply_test.odin`'s `same_projection` and its RDF 1.2 count,
       `snapshot_test.odin`, `scale_test.odin` ×3) move to a private
       enumeration helper over a root.
-- [ ] `make test` green in full, both verifiers agreeing; the reader/writer
+- [x] `make test` green in full, both verifiers agreeing; the reader/writer
       torture and the crash sweep unchanged.
-- [ ] Boot re-measured with `test_scale_boot_bulk` / `_edited`: within a few
+- [x] Boot re-measured with `test_scale_boot_bulk` / `_edited`: within a few
       ms of 197 / 273 ms; the log line gains the pack.
 
 ## Implementation Notes
@@ -79,4 +79,38 @@ yet — that is `RECORD-T-0042`'s — so this task can be judged on reads alone.
 
 ## Status Updates
 
-*To be added during implementation*
+**2026-09-04 — done.** The tree is the store's permutation for reads and
+boot; `apply` still sort-and-packs (T-0042's move).
+
+- `Store`: `ord: [Order]Perm_Root`, `ord_built`, `perm: Perm_Arena`,
+  `retired` + `retire_mu`. `store_destroy` releases an unpublished build,
+  drains, asserts the arena empty, then destroys it.
+- `store_build_permutations`: sort as before, pack each order under
+  generation `n_epochs`; releases an unpublished build's roots *once, before
+  the loop* — the first cut released per order and freed leaf 0 seven times,
+  which the whole suite caught as a refcount underflow at the first publish.
+- `Index_Set`: seven roots plus clones of the arena's two chunk lists;
+  `release_set` at zero retires `set.ord` under `retire_mu`;
+  `store_drain_retired` (writer only) runs after every install, at the top
+  of `apply`, in `rollback`, and in `store_destroy`.
+- `read.odin`: `Range{lo, hi}`, `Scan{cur: Perm_Cursor}`, two `perm_rank`
+  descents through the set's copies, `prefix_bound` deleted. `make api`: 73.
+- Tests: the six direct-access sites go through `perm_collect` (package-
+  private, in `btree_test.odin`). New: `test_read_ordered_output` (every
+  order × nine prefixes over the duplicate-heavy corpus, keys strictly
+  ascending, counts equal to the oracle) and
+  `test_snapshot_retire_from_reader_thread` (a set dying on a spawned thread
+  retires, nothing moves until the writer drains, then exactly set 1's
+  leaves go). The reader/writer torture passed unchanged — its 300 publishes
+  against 256k acquisitions are the retire list's first real workout.
+- Benchmark: the flat read path lives in `btree_bench_test.odin` now
+  (`xb_flat_bound` is the old `prefix_bound`), so the comparison survives.
+
+**Measured** (alone, `-o:speed`): boot 193 ms bulk-loaded / 282 ms
+hand-edited (197 / 273 before), sort+pack 46–47 ms; awake from disk
+198 ms with the pack at 0.9 ms. Resident "permutations" is the arena's live
+bytes, 9.4 MB at the scale corpus; the 1.2 MB "rest" is the partially used
+last leaf and inner chunks. Commit latency is 37–43 ms as expected until
+T-0042.
+
+`make check` green (73 names); `make test` 92 + 11 + 1 + 99, all green.
