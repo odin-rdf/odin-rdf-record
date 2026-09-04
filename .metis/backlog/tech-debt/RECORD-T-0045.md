@@ -1,10 +1,10 @@
 ---
-id: the-scale-pass-in-ci-measures-a-wall-clock-budget
+id: the-scale-pass-in-ci-measures-a
 level: task
 title: "The scale pass in CI measures a wall-clock budget with two test threads on a shared runner, and it flaked at 1007 ms"
 short_code: "RECORD-T-0045"
-created_at: 2026-09-04T20:40:00.000000+00:00
-updated_at: 2026-09-04T20:40:00.000000+00:00
+created_at: 2026-09-04T20:40:00+00:00
+updated_at: 2026-09-04T20:11:58.511473+00:00
 parent: 
 blocked_by: []
 archived: false
@@ -12,10 +12,10 @@ archived: false
 tags:
   - "#task"
   - "#tech-debt"
-  - "#phase/backlog"
+  - "#phase/completed"
 
 
-exit_criteria_met: false
+exit_criteria_met: true
 initiative_id: NULL
 ---
 
@@ -43,18 +43,33 @@ Two things make the number noisier than the criterion it stands for:
 
 ## Acceptance Criteria
 
-- [ ] The scale pass measures what the criterion says: single-threaded
-      (`-define:ODIN_TEST_THREADS=1` on the scale pass in the Makefile is
-      the smallest change, and it is what every reported figure was already
-      measured with), and the assertion's margin on the ubuntu runner is
-      known rather than guessed — state it in the test's log line.
-- [ ] Decide, and record in the test, whether the budget is a *CI gate* or a
-      *measurement*: a gate wants a runner-aware bound (or a `RECORD_SCALE`
-      run that logs and never fails on time), a measurement wants the solo
-      run and the number in the log. Do not simply raise the constant.
+- [x] Every wall-clock budget in `record/scale_test.odin` is a **warning,
+      not a gate**: verify, replay, boot, commit max and commit mean go
+      through one file-private `budget` helper that `log.warnf`s when a
+      figure is over and fails nothing. Counts, verdicts and the byte
+      accounting are still asserted.
+- [x] The file header states the decision and where the discipline moved.
+- [x] `make check` and the optimized scale pass green.
+
+## Decision (owner, 2026-09-04)
+
+The clocks become warnings. "It takes the time it takes and sometimes the
+CI runners are slow." The criterion is about the production system, not the
+dev machine or a CI runner, so the discipline moves to where it means
+something: **an official release is measured on production hardware**, and
+the wake time may later be reported from inside the store — a notification
+hook on `store_open` when a wake runs over budget — which would be a small
+API addition and is not built here. Not taken: running the scale pass
+single-threaded (the reported figure would be closer to the documented one,
+but a warning's number is informational either way), and raising the
+constant.
 
 ## Status Updates
 
 - 2026-09-04 — filed from the `v0.9.0` release (`RECORD-T-0044`). Not a
   code regression: the failing job was re-run and passed, and the tag was
   cut on the green rerun.
+- 2026-09-04 — done. Five assertions became one helper's warnings; `make
+  check` green, the optimized pass 101/101. A slow runner now prints a
+  `[WARN]` line carrying the figure and the budget and the build stays
+  green.

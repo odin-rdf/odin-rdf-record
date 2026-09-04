@@ -249,7 +249,10 @@ their side, once that API is real.
 > source change, every pin holding); 74 exported names. The release's one
 > finding was about CI, not the code: the scale pass's one-second boot
 > budget ran at 1007 ms on a shared ubuntu runner where the previous green
-> run had 941 — a rerun passed; filed as `RECORD-T-0045`.
+> run had 941 — a rerun passed. `RECORD-T-0045`, the same evening: **the
+> clocks in the scale pass are warnings now, not gates.** The criterion is
+> about the production machine, so a release is measured there, and CI
+> reports the figure without failing on it.
 
 ## Future State
 
