@@ -93,7 +93,7 @@ test_permutations_inline_order :: proc(t: ^testing.T) {
 // key tuples — extract-then-compare, against the comparator's
 // compare-in-place — with FactID as the fifth element, so "sorted and
 // deterministic" is one check.
-@(private = "file")
+@(private)
 oracle_tuple :: proc(s: ^Store, key: [4]Component, id: Fact_ID) -> [5]u32 {
 	f := store_fact(s, id)
 	return {
@@ -105,7 +105,7 @@ oracle_tuple :: proc(s: ^Store, key: [4]Component, id: Fact_ID) -> [5]u32 {
 	}
 }
 
-@(private = "file")
+@(private)
 oracle_lt :: proc(a, b: [5]u32) -> bool {
 	for i in 0 ..< 5 {
 		if a[i] != b[i] {
@@ -115,7 +115,7 @@ oracle_lt :: proc(a, b: [5]u32) -> bool {
 	return false
 }
 
-@(private = "file")
+@(private)
 oracle_fill :: proc(s: ^Store, seed: u64) {
 	neg, _ := inline_integer(-1)
 	zero, _ := inline_integer(0)
