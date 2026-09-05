@@ -1,6 +1,7 @@
 package record
 
 import "core:fmt"
+import "core:log"
 import "core:os"
 import "core:testing"
 
@@ -14,8 +15,15 @@ import "core:testing"
 // assert (which this store's writer never produces in practice,
 // RECORD-A-0002, but the format defines and the tool must read).
 
+// BIN is located from this source file rather than from the working
+// directory: `make tool` builds it into this repository's build/, and
+// a consumer compiling this package's tests into its own binary runs
+// them from its own directory, where "build/record" is nothing at all
+// (RECORD-T-0047). When it is absent the test says so and returns —
+// there is no CLI to assert, which is a missing build and not a
+// failing one. DIR stays relative; it is the runner's scratch.
 @(private = "file")
-BIN :: "build/record"
+BIN :: #directory + "../build/record"
 @(private = "file")
 DIR :: "build/tool-test"
 
@@ -77,6 +85,11 @@ build_store :: proc(t: ^testing.T) -> (head_hex: string) {
 
 @(test)
 test_tool :: proc(t: ^testing.T) {
+	if !os.exists(BIN) {
+		log.warnf("%s is absent — `make tool` builds it; skipping the CLI test", BIN)
+		return
+	}
+
 	head_hex := build_store(t)
 	defer delete(head_hex)
 

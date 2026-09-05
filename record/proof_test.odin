@@ -25,8 +25,16 @@ import "rdf:rdf"
 STORE :: "build/proof/store"
 @(private = "file")
 CASE_DIR :: "build/proof/case"
+// The Python verifier is located from this source file and not from
+// the working directory: a consumer that compiles this package's
+// tests into its own binary (`odin test <main> -all-packages`) runs
+// them from its own directory, where a relative path finds nothing
+// and every case fails as "implementations disagree" against an empty
+// verdict (RECORD-T-0047). The scratch directories below stay
+// relative on purpose — they are the runner's litter, not this
+// repository's.
 @(private = "file")
-PY :: "tests/verify/rdflog_verify.py"
+PY :: #directory + "../tests/verify/rdflog_verify.py"
 
 @(private = "file")
 WALL :: u64(1_700_000_000_000_000_000)
