@@ -205,12 +205,26 @@ tools; `make install INSTALL_DIR=/usr/local/bin` for a system install:
 build/rdfrecord verify <dir>                    # full chain verification; head hash and last epoch
 build/rdfrecord head <dir>                      # derived head beside the advisory HEAD file
 build/rdfrecord dump [--format=nquads|json] <dir>   # every fact operation, terms resolved
+build/rdfrecord stats [--format=plain|json] [--prefix=<iri>] <dir>   # a census: live facts, graphs, rdf:type classes
 ```
 
-All three are read-only. Exit codes: 0 clean, 2 a torn tail was found
-(reported, never repaired here), 1 anything else. A dump renders the log —
-the sequence of operations, retractions marked as events — not the graph
-they produce.
+All four are read-only, and that is a constraint rather than an
+observation: none of them opens the store. `stats` in particular could be
+answered in a handful of calls from a booted store — `range_len` is O(1) —
+and is folded from the log instead, because `store_open` recovers, resumes
+the writer, rewrites `HEAD` and can append an environment note, and an
+auditor's tool must not mutate the thing it is auditing. The cost is time
+and memory proportional to the walk: ~0.9 s and ~135 MB over a 4×10⁵-op,
+2.8×10⁵-fact store, against a 273 ms boot.
+
+Exit codes: 0 clean, 2 a torn tail was found (reported, never repaired
+here), 1 anything else. A dump renders the log — the sequence of
+operations, retractions marked as events — not the graph they produce;
+`stats` renders what those operations leave live, which is the other
+question. `--prefix` restricts the class census to class IRIs with a given
+prefix, and `rdf:type` is the one vocabulary assumption anywhere in this
+repository — it lives in the tool, where a census is a convenience rather
+than a contract.
 
 There is deliberately no `Term_ID` width matrix here: this store fixes both of
 its ID widths by design — `u64` on disk, `u32` resident with an inline range —
