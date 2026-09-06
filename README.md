@@ -187,7 +187,8 @@ allow borrowing past a statement — and `apply` copies what it interns.
 ```
 make test    # the test suite (builds the CLI first; tests/tool drives it)
 make check   # vet every package with -vet -strict-style
-make tool    # build the record CLI into build/record
+make tool    # build the rdfrecord CLI into build/rdfrecord
+make install # build it optimized and install it into ~/.local/bin
 make help    # list targets
 make clean   # remove build/
 ```
@@ -196,12 +197,14 @@ make clean   # remove build/
 independent verifier in `tests/verify/` over a fault corpus and requires
 both implementations to agree verdict for verdict.
 
-The CLI is the read surface an auditor gets (`log.md` §12 q6):
+The CLI is the read surface an auditor gets (`log.md` §12 q6). It installs
+as `rdfrecord` — the name it carries on PATH beside the family's other
+tools; `make install INSTALL_DIR=/usr/local/bin` for a system install:
 
 ```
-build/record verify <dir>                    # full chain verification; head hash and last epoch
-build/record head <dir>                      # derived head beside the advisory HEAD file
-build/record dump [--format=nquads|json] <dir>   # every fact operation, terms resolved
+build/rdfrecord verify <dir>                    # full chain verification; head hash and last epoch
+build/rdfrecord head <dir>                      # derived head beside the advisory HEAD file
+build/rdfrecord dump [--format=nquads|json] <dir>   # every fact operation, terms resolved
 ```
 
 All three are read-only. Exit codes: 0 clean, 2 a torn tail was found

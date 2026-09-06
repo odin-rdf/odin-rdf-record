@@ -8,7 +8,7 @@ import "core:testing"
 
 // The CLI's end-to-end test (RECORD-T-0005): build a known log with
 // the library's writer, run the built binary over it — `make test`
-// builds `build/record` first — and assert the exact output of every
+// builds `build/rdfrecord` first — and assert the exact output of every
 // subcommand, exit codes included. The log covers what the formats
 // must render: an inlined integer, a language literal, a named graph
 // and the default graph, an attributed epoch, a retract, and a derived
@@ -18,12 +18,12 @@ import "core:testing"
 // BIN is located from this source file rather than from the working
 // directory: `make tool` builds it into this repository's build/, and
 // a consumer compiling this package's tests into its own binary runs
-// them from its own directory, where "build/record" is nothing at all
+// them from its own directory, where "build/rdfrecord" is nothing at all
 // (RECORD-T-0047). When it is absent the test says so and returns —
 // there is no CLI to assert, which is a missing build and not a
 // failing one. DIR stays relative; it is the runner's scratch.
 @(private = "file")
-BIN :: #directory + "../build/record"
+BIN :: #directory + "../build/rdfrecord"
 @(private = "file")
 DIR :: "build/tool-test"
 

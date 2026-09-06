@@ -84,9 +84,9 @@ main :: proc() {
 }
 
 usage :: proc() {
-	fmt.eprintln("usage: record verify <dir>")
-	fmt.eprintln("       record head <dir>")
-	fmt.eprintln("       record dump [--format=nquads|json] <dir>")
+	fmt.eprintln("usage: rdfrecord verify <dir>")
+	fmt.eprintln("       rdfrecord head <dir>")
+	fmt.eprintln("       rdfrecord dump [--format=nquads|json] <dir>")
 }
 
 cmd_verify :: proc(args: []string) -> int {

@@ -36,7 +36,7 @@ PKGS := record record/ingest tests/ingest tests/readme
 # (par. 3) -- because the inline encoding is frozen at first write (par. 3.3)
 # and a build knob would put that freeze at the mercy of a flag.
 
-.PHONY: all help test check api tool clean
+.PHONY: all help test check api tool install clean
 
 all: test
 
@@ -83,10 +83,35 @@ api: ## Check the exported surface against doc/api-surface.txt
 	@python3 tests/api/api_surface.py check
 
 # The CLI (log.md par. 12 q6): verify, dump, head — the auditor's read
-# surface, a consumer of the record package like any other.
-tool: ## Build the record CLI into build/record
+# surface, a consumer of the record package like any other. The binary is
+# `rdfrecord` rather than `record`: installed, it sits on PATH beside
+# vsuite-be's rdfgen, rdfcheck, rdffmt and rdfseed, and `record` is a word
+# too common to own there. record/tool_test.odin locates it by #directory.
+BIN := build/rdfrecord
+
+tool: ## Build the record CLI into build/rdfrecord
 	@mkdir -p build
-	odin build tool -out:build/record -vet -strict-style $(COLL)
+	odin build tool -out:$(BIN) -vet -strict-style $(COLL)
+
+# What `install` places is one optimized binary — this repository is a library
+# and the CLI is its only executable. The debug build `tool` makes is the one
+# the test suite drives; an installed tool is somebody's auditor, so it is
+# built -o:speed into its own path and never overwrites build/rdfrecord.
+# INSTALL_DIR is the one knob, defaulting to the per-user bin directory the
+# XDG layout puts on PATH, matching vsuite-be's install target; a system
+# install is `make install INSTALL_DIR=/usr/local/bin` under whatever
+# privilege that needs. `install -m 0755` rather than `cp` so a running
+# binary is replaced rather than written through, and so the mode is stated
+# rather than inherited from build/'s umask.
+INSTALL_DIR ?= $(HOME)/.local/bin
+RELEASE_BIN := build/rdfrecord-release
+
+install: ## Build an optimized rdfrecord and install it into INSTALL_DIR
+	@mkdir -p build
+	odin build tool -out:$(RELEASE_BIN) -o:speed -vet -strict-style $(COLL)
+	@install -d $(INSTALL_DIR)
+	@install -m 0755 $(RELEASE_BIN) $(INSTALL_DIR)/rdfrecord
+	@echo "install: $(INSTALL_DIR)/rdfrecord"
 
 clean: ## Remove build/
 	rm -rf build

@@ -631,7 +631,7 @@ test_ingest_triple_term_commits :: proc(t: ^testing.T) {
 }
 
 RT_DIR :: "build/ingest/roundtrip"
-BIN :: "build/record"
+BIN :: "build/rdfrecord"
 
 @(test)
 test_ingest_dump_round_trip :: proc(t: ^testing.T) {
