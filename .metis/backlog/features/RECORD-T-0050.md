@@ -178,6 +178,39 @@ which is what an assertion on exact bytes is for -- and the same store now reads
 
     0.61 s wall, 0.33 s user, 82 MB RSS
 
+**2026-09-06, later still — measured on a real store**, `vsuite-be/build/volume.record`
+(1.23 MB log, 12 epochs, 24,597 asserts, **0 retracts**, 24,597 live facts, 7,556
+terms, 21 graphs), optimized builds, macOS peak memory footprint rather than
+maximum RSS -- the two differ by the binary's own file-backed pages, ~6.6 MB
+here, and mixing them is how the figures above read high:
+
+| | user | footprint |
+|---|---|---|
+| `dump` | 0.010 s | 3.78 MB |
+| stats: walk only | 0.010 s | 3.73 MB |
+| stats: + intern | 0.040 s | 5.58 MB |
+| stats: full | 0.050 s | 8.16 MB |
+| stats, pre-intern build | 0.060 s | 16.67 MB |
+
+The intern rewrite is worth 16.7 -> 8.2 MB on this store, and the residue above
+`dump` is +4.4 MB and +0.04 s, of which **three quarters of the time is the
+intern** -- the same finding as at scale, and the reason [[RECORD-T-0051]] is
+about time here rather than memory.
+
+Two things this store taught that the synthetic one could not:
+
+- **`retracts: 0`.** An append-only store makes `facts == asserts` exactly, so
+  the live set is insurance against a retraction that has not happened. A cheap
+  win nobody has asked for yet: keep no set until the first retract arrives and
+  build it from the walk at that point, which would put stats at `dump` + intern
+  on every store that has only ever appended. Noted, not filed -- it is ~20 lines
+  and wants a consumer asking for it.
+- **A stale `make install` is indistinguishable from a slow program.** The
+  figures that started this investigation were a binary installed ten minutes
+  before the rewrite. `make install` builds `-o:speed` into its own path and the
+  suite asserts against the debug `build/rdfrecord`, so the two can disagree
+  silently and did.
+
 **47 MB and 0.24 s still sit above the walk**, and that residue is not fixable
 from `tool/`: it is a dictionary of 80,879 terms rebuilt beside the one
 `log_read` owns, because the seam decodes ids into terms and drops the ids. Filed

@@ -50,6 +50,20 @@ should carry the ids.
   | + stats' first cut (live set keyed on the quad's rendered text) | 0.91 s | 0.57 s | 135 MB |
   | + stats as shipped (tool-side intern, live set keyed on four `u32`) | 0.61 s | 0.33 s | 82 MB |
 
+  And on a real store, `vsuite-be/build/volume.record` (1.23 MB log, 24,597
+  asserts, 7,556 terms), by peak memory footprint:
+
+  | | user | footprint |
+  |---|---|---|
+  | `dump` / walk alone | 0.010 s | 3.78 MB |
+  | + tool-side intern | 0.040 s | 5.58 MB |
+  | + live set (full `stats`) | 0.050 s | 8.16 MB |
+
+  At that size **the intern is three quarters of the added time and under half of
+  the added memory**, which inverts the emphasis: at scale this reads as a memory
+  problem and on an ordinary store it is a latency one. Either way it is the same
+  duplication.
+
   The intern took 53 MB and 0.24 s of user time out of it and is worth having on
   its own terms. What remains -- **47 MB and 0.24 s above the walk** -- is a
   dictionary of 80,879 terms rebuilt by hand beside the one `log_read` owns, plus
