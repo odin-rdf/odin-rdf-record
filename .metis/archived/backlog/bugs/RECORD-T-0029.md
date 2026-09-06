@@ -7,7 +7,7 @@ created_at: 2026-08-26T21:29:05.621624+00:00
 updated_at: 2026-08-26T22:23:23.724873+00:00
 parent: 
 blocked_by: []
-archived: false
+archived: true
 
 tags:
   - "#task"
