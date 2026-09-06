@@ -89,3 +89,13 @@ top-level claims rather than leave it 400 lines into the format spec.
 ## Status
 
 **2026-09-02 — todo.**
+
+**2026-09-06 — one more thing the wording must carry.** [[RECORD-T-0037]]
+decided a signed `HEAD` is worth building and that it **bounds** rollback
+to epochs the attacker observed a HEAD for, rather than preventing tail
+removal. State it that way. The tempting sentence — "signed heads prevent
+truncation" — is false against a persistent adversary, who reads HEAD
+while it is current (write access implies read) or recovers it from a
+backup or filesystem snapshot. Freshness needs a witness outside the write
+domain, a hardware monotonic counter, or WORM; that belongs in the trust
+model paragraph beside the existing external-publication note.

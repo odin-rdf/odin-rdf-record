@@ -107,6 +107,18 @@ other three.
       `api.md` amended to describe the seams (amend, don't rewrite).
 - [ ] Both engines compile with no source change; format version stays 2.
 
+## The HEAD signature is a separate switch (2026-09-06)
+
+[[RECORD-T-0037]] decided to read and compare the local `HEAD` by default,
+and recorded that signing it *bounds* rollback to epochs an attacker
+observed rather than preventing it. If a consumer wants that signature, it
+must be **independently configurable from the seal signature** and not
+implied by wiring an `Attestor`: the seal signs at rotation precisely to
+keep the signer off the commit path, and HEAD is written on every commit,
+so one switch would silently put a network HSM in the way of every
+`apply`. Local or TPM-held keys make it a reasonable posture; a remote
+signer does not.
+
 ## Open question for the owner
 
 Whether attestation gets its own ADR alongside `RECORD-A-0006` — *"signing
