@@ -150,6 +150,44 @@ RSS**. Against the same store's 273 ms boot and 65 ms replay, that is the price
 of the read-only choice, and it is the right one at CLI scale. The bound is the
 live set, not the log.
 
+**2026-09-06, later — the paragraph above was wrong about where the price came
+from, and the implementation was rewritten.** Asked why streaming a store to
+count it should cost 135 MB and beat a resident boot, the honest answer was that
+it should not. Three builds over the same store separated the walk from the fold:
+
+| | wall | user | RSS |
+|---|---|---|---|
+| `log_read` walk alone, consumer counts and returns | 0.37 s | 0.09 s | 34.6 MB |
+| + render the key, discard it | 0.57 s | 0.30 s | 34.6 MB |
+| + clone, keys list, map insert (as shipped) | 0.91 s | 0.57 s | 135 MB |
+
+So the walk was never the cost: **100 MB and 0.48 s of the 0.57 s user time were
+the fold**, and it was waste. Keying the live set on the rendered text of the
+whole quad stores the expanded form of all four terms for every one of 340,145
+asserts and throws away the one thing the log had already done -- it interned
+every term. The resident store holds the same content in 22.8 MB because a fact
+there is four ids and two epochs. Two smaller faults compounded it: a `keys`
+list that grew with every assert and was never freed, and a renderer writing a
+byte at a time through an `io.Writer` vtable.
+
+**Rewritten to intern.** Each distinct term is rendered once, owned once and
+given a `u32`; the live set is keyed on `Quad_Key`, four of those; rendering
+appends into a reused byte buffer; the censuses tally ids and render nothing
+until the end. Output is byte-identical -- `test_tool_stats` passed unchanged,
+which is what an assertion on exact bytes is for -- and the same store now reads
+
+    0.61 s wall, 0.33 s user, 82 MB RSS
+
+**47 MB and 0.24 s still sit above the walk**, and that residue is not fixable
+from `tool/`: it is a dictionary of 80,879 terms rebuilt beside the one
+`log_read` owns, because the seam decodes ids into terms and drops the ids. Filed
+as [[RECORD-T-0051]] with these measurements, per the family's
+capability-gaps-become-evidence convention. Not pursued here, and worth naming so
+it is not re-derived: the *next* win after that would be log.md par. 8's own
+argument -- collect the ops flat and sort once instead of hashing 4x10^5 times --
+which would save perhaps 15 MB more and is not worth the complexity in an
+auditor's tool.
+
 **Not changed, and noticed on the way**: `dump --format=json` still refuses a
 triple term -- `json_term`'s `^rdf.Triple` arm returns false with the comment
 "no triple terms in format v1 (tag 0x07 reserved)", which format v2

@@ -213,9 +213,11 @@ observation: none of them opens the store. `stats` in particular could be
 answered in a handful of calls from a booted store — `range_len` is O(1) —
 and is folded from the log instead, because `store_open` recovers, resumes
 the writer, rewrites `HEAD` and can append an environment note, and an
-auditor's tool must not mutate the thing it is auditing. The cost is time
-and memory proportional to the walk: ~0.9 s and ~135 MB over a 4×10⁵-op,
-2.8×10⁵-fact store, against a 273 ms boot.
+auditor's tool must not mutate the thing it is auditing. Over a 4×10⁵-op,
+2.8×10⁵-fact store that costs ~0.6 s and ~82 MB, against a 0.37 s / 35 MB
+walk underneath it and a 273 ms boot; the gap is a term dictionary rebuilt
+in the tool, because `log_read` decodes ids into terms and drops the ids
+(`RECORD-T-0051`).
 
 Exit codes: 0 clean, 2 a torn tail was found (reported, never repaired
 here), 1 anything else. A dump renders the log — the sequence of

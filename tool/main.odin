@@ -438,7 +438,6 @@ wu :: proc(w: io.Writer, v: u64) -> bool {
 	buf: [20]u8
 	return ws(w, fmt.bprintf(buf[:], "%d", v))
 }
-
 // ---------------------------------------------------------------------------
 // stats (RECORD-T-0050)
 //
@@ -451,12 +450,10 @@ wu :: proc(w: io.Writer, v: u64) -> bool {
 // it folds the live set itself.
 //
 // The fold is log.md par. 5.3's rule and only that rule: an assert adds
-// the quad, a retract removes it. That duplicates, in the tool and over
-// owned strings, what the Loader does residently over ids -- deliberately,
-// because the tool has no dictionary and no fact table, and because the
-// duplication is one line of semantics rather than a re-export of the
-// format. Memory is proportional to the ops walked; a store too large to
-// count this way is too large to dump either.
+// the quad, a retract removes it. That duplicates, in the tool, what the
+// Loader does residently -- deliberately, because the tool has no
+// dictionary and no fact table, and because the duplication is one line
+// of semantics rather than a re-export of the format.
 //
 // Because the fold is the tool's own, it also *sees* the preconditions
 // replay does not judge (they are the Loader's): an assert of a quad
@@ -464,9 +461,32 @@ wu :: proc(w: io.Writer, v: u64) -> bool {
 // reported rather than folded away silently -- on a sound log both are
 // zero, and a nonzero one is a finding.
 //
-// Facts are keyed by an N-Triples rendering of (s, p, o, g), which is
-// injective, and the graph and class censuses are slices into that same
-// key, so a census costs no second copy of a term.
+// # Why this interns, and what it costs
+//
+// The first cut of this command keyed the live set on an N-Triples
+// rendering of the whole quad: correct, and 135 MB and 0.57 s of user
+// time over a 4x10^5-op store, against a 34.6 MB, 0.09 s walk underneath
+// it. Storing the expanded text of all four terms per fact throws away
+// the one thing the log had already done -- it interned every term, and
+// the resident store holds the same content in 22.8 MB because a fact
+// there is four ids and two epochs.
+//
+// So the tool interns too: each distinct term is rendered once, owned
+// once, and given a `u32`, and the live set is keyed on `Quad_Key`, four
+// of those. Rendering goes into a reused byte buffer rather than through
+// an io.Writer, because a per-byte virtual call was most of what the
+// rendering cost. The censuses tally ids and render nothing until the
+// end, where only the distinct graphs and classes are named.
+//
+// This is still the log's dictionary rebuilt by hand: `log_read` decodes
+// ids into terms and drops the ids, so a consumer that wants to *count*
+// rather than *print* has to re-intern exactly what the package just
+// un-interned. That is a seam gap and it is filed as evidence, not
+// worked around here (RECORD-T-0051).
+//
+// A term's rendering is N-Triples syntax, which is injective -- two
+// distinct terms never render alike -- and readable, so the same string
+// serves as the intern key and as what the censuses print.
 //
 // rdf:type is the one vocabulary assumption anywhere in this repository,
 // and it lives here, where a census is a convenience rather than a
@@ -483,19 +503,22 @@ Stats_Format :: enum {
 	JSON,
 }
 
-// Live is one live quad's census data, held as offsets into the map key
-// that owns the rendering: [o_lo, o_hi) is the object, [g_lo, g_hi) the
-// graph label -- empty for the default graph, which has no rendering.
-Stats_Live :: struct {
-	o_lo, o_hi: u32,
-	g_lo, g_hi: u32,
-	is_type:    bool,
+// Quad_Key identifies a fact by four interned term ids. `g` is 0 for the
+// default graph, which is why intern ids start at 1: no term is ever 0,
+// so the default graph needs no rendering and collides with nothing.
+Quad_Key :: struct {
+	s, p, o, g: u32,
 }
 
 Stats :: struct {
-	live:     map[string]Stats_Live,
-	keys:     [dynamic]string, // every key ever cloned, for the free
-	sb:       strings.Builder, // the per-op key scratch, reused
+	// The tool's dictionary: a term's N-Triples rendering to its id, and
+	// the reverse as a slice indexed by id-1. The map owns every
+	// rendering; `names` borrows them.
+	ids:      map[string]u32,
+	names:    [dynamic]string,
+	live:     map[Quad_Key]bool,
+	buf:      [dynamic]u8, // the per-term render scratch, reused
+	type_id:  u32, // rdf:type, interned up front so the test is an integer compare
 	epochs:   u64,
 	asserts:  u64,
 	retracts: u64,
@@ -542,16 +565,8 @@ cmd_stats :: proc(args: []string) -> int {
 	}
 
 	st: Stats
-	st.live = make(map[string]Stats_Live)
-	strings.builder_init(&st.sb)
-	defer {
-		for k in st.keys {
-			delete(k)
-		}
-		delete(st.keys)
-		delete(st.live)
-		strings.builder_destroy(&st.sb)
-	}
+	defer stats_destroy(&st)
+	st.type_id, _ = stats_intern(&st, rdf.RDF_TYPE)
 
 	r, tear, err := rec.log_read(dir, rec.posix_file_ops(), rec.Log_Consumer{
 		data   = &st,
@@ -600,6 +615,16 @@ cmd_stats :: proc(args: []string) -> int {
 	return 0
 }
 
+stats_destroy :: proc(st: ^Stats) {
+	for name in st.names {
+		delete(name)
+	}
+	delete(st.names)
+	delete(st.ids)
+	delete(st.live)
+	delete(st.buf)
+}
+
 // class_prefix takes the --prefix argument as the user wrote it. An IRI
 // is commonly written in angle brackets, and a prefix of one reads
 // naturally that way too, so a leading `<` (and a trailing `>`) is
@@ -615,6 +640,28 @@ class_prefix :: proc(arg: string) -> string {
 	return s
 }
 
+// stats_intern renders a term into the reused buffer and returns its id,
+// allocating only when the term is new. The borrowed rendering is a valid
+// map key for the probe -- Odin hashes and compares a string's contents --
+// so a term already seen costs one hash and no allocation at all, which
+// is the whole point: a log defines each term once and names it many
+// times.
+stats_intern :: proc(st: ^Stats, t: rdf.Term) -> (id: u32, ok: bool) {
+	clear(&st.buf)
+	if !nt_term(&st.buf, t) {
+		return 0, false
+	}
+	key := string(st.buf[:])
+	if existing, found := st.ids[key]; found {
+		return existing, true
+	}
+	owned := strings.clone(key)
+	id = u32(len(st.names)) + 1 // ids start at 1; 0 is the default graph
+	st.ids[owned] = id
+	append(&st.names, owned)
+	return id, true
+}
+
 stats_commit :: proc(data: rawptr, epoch, wall: u64, actor, reason: rdf.Term) -> bool {
 	st := (^Stats)(data)
 	_, _, _ = wall, actor, reason
@@ -626,7 +673,7 @@ stats_commit :: proc(data: rawptr, epoch, wall: u64, actor, reason: rdf.Term) ->
 stats_op :: proc(data: rawptr, epoch: u64, kind: rec.Op_Kind, q: rdf.Quad) -> bool {
 	st := (^Stats)(data)
 	_ = epoch
-	key, live, ok := stats_render(st, q)
+	key, ok := stats_key(st, q)
 	if !ok {
 		st.fail = "a term of the log does not render"
 		return false
@@ -639,11 +686,9 @@ stats_op :: proc(data: rawptr, epoch: u64, kind: rec.Op_Kind, q: rdf.Quad) -> bo
 		}
 		if key in st.live {
 			st.dup += 1
-			return true // the first generation stands; the key is not re-owned
+			return true // the first generation stands
 		}
-		owned := strings.clone(key)
-		append(&st.keys, owned)
-		st.live[owned] = live
+		st.live[key] = true
 	case .Retract, .Retract_Derived:
 		st.retracts += 1
 		if !(key in st.live) {
@@ -655,86 +700,77 @@ stats_op :: proc(data: rawptr, epoch: u64, kind: rec.Op_Kind, q: rdf.Quad) -> bo
 	return true
 }
 
-// stats_render builds the fact's key in the reused builder and returns
-// it borrowed -- valid until the next op, which is exactly as long as
-// the caller needs it to decide whether to clone. The offsets it reports
-// are into the key, so they survive the clone unchanged.
-stats_render :: proc(st: ^Stats, q: rdf.Quad) -> (key: string, live: Stats_Live, ok: bool) {
-	strings.builder_reset(&st.sb)
-	w := strings.to_writer(&st.sb)
-	if !nt_term(w, q.subject) {
-		return "", {}, false
+stats_key :: proc(st: ^Stats, q: rdf.Quad) -> (key: Quad_Key, ok: bool) {
+	if key.s, ok = stats_intern(st, q.subject); !ok {
+		return {}, false
 	}
-	if !ws(w, " ") || !nt_term(w, q.predicate) || !ws(w, " ") {
-		return "", {}, false
+	if key.p, ok = stats_intern(st, q.predicate); !ok {
+		return {}, false
 	}
-	live.o_lo = u32(strings.builder_len(st.sb))
-	if !nt_term(w, q.object) {
-		return "", {}, false
+	if key.o, ok = stats_intern(st, q.object); !ok {
+		return {}, false
 	}
-	live.o_hi = u32(strings.builder_len(st.sb))
-	if !ws(w, " ") {
-		return "", {}, false
-	}
-	live.g_lo = u32(strings.builder_len(st.sb))
 	switch v in q.graph {
 	case rdf.IRI:
-		if !nt_term(w, v) {
-			return "", {}, false
+		if key.g, ok = stats_intern(st, v); !ok {
+			return {}, false
 		}
 	case rdf.Blank_Node:
-		if !nt_term(w, v) {
-			return "", {}, false
+		if key.g, ok = stats_intern(st, v); !ok {
+			return {}, false
 		}
-	case nil: // the default graph renders as nothing, which no label does
+	case nil: // the default graph keeps id 0
 	}
-	live.g_hi = u32(strings.builder_len(st.sb))
-	if iri, is_iri := q.predicate.(rdf.IRI); is_iri {
-		live.is_type = string(iri) == string(rdf.RDF_TYPE)
-	}
-	return strings.to_string(st.sb), live, true
+	return key, true
+}
+
+// stats_name renders an id for the output. 0 is the default graph, which
+// has no rendering at all -- unambiguous in the data, because no graph
+// label renders as the empty string.
+stats_name :: proc(st: ^Stats, id: u32) -> string {
+	return "" if id == 0 else st.names[id - 1]
 }
 
 census_graphs :: proc(st: ^Stats) -> []Census {
-	tally := make(map[string]u64)
+	tally := make(map[u32]u64)
 	defer delete(tally)
-	for k, v in st.live {
-		tally[k[v.g_lo:v.g_hi]] += 1
+	for k in st.live {
+		tally[k.g] += 1
 	}
-	return census_sorted(tally)
+	return census_sorted(st, tally)
 }
 
 // census_classes tallies the object of every live rdf:type fact.
 // `total` is the count before the prefix filter, so the plain output can
-// say "3 of 137" rather than leave the filter's effect invisible.
+// say "1 of 2" rather than leave the filter's effect invisible.
 census_classes :: proc(st: ^Stats, prefix: string, has_prefix: bool) -> (rows: []Census, total: int) {
-	tally := make(map[string]u64)
+	tally := make(map[u32]u64)
 	defer delete(tally)
-	all := make(map[string]bool)
+	all := make(map[u32]bool)
 	defer delete(all)
-	for k, v in st.live {
-		if !v.is_type {
+	for k in st.live {
+		if k.p != st.type_id {
 			continue
 		}
-		name := k[v.o_lo:v.o_hi]
-		all[name] = true
+		all[k.o] = true
 		if has_prefix {
 			// A class that is not an IRI has no prefix to match: the
 			// rendering of every other kind starts with something else.
+			name := stats_name(st, k.o)
 			if len(name) == 0 || name[0] != '<' || !strings.has_prefix(name[1:], prefix) {
 				continue
 			}
 		}
-		tally[name] += 1
+		tally[k.o] += 1
 	}
-	return census_sorted(tally), len(all)
+	return census_sorted(st, tally), len(all)
 }
 
-census_sorted :: proc(tally: map[string]u64) -> []Census {
+census_sorted :: proc(st: ^Stats, tally: map[u32]u64) -> []Census {
 	rows := make([]Census, len(tally))
 	i := 0
-	for name, count in tally {
-		rows[i] = Census{name = name, count = count}
+	for id, count in tally {
+		rows[i] = Census{name = stats_name(st, id), count = count}
 		i += 1
 	}
 	slice.sort_by(rows, proc(a, b: Census) -> bool {
@@ -873,112 +909,102 @@ stats_json :: proc(
 // ---------------------------------------------------------------------------
 // N-Triples term rendering.
 //
-// The key's job is injectivity -- two distinct quads must never render
-// alike -- and the census's job is readability, and N-Triples syntax is
-// the one rendering that serves both. It is written here rather than
-// taken from the parser repo because rdf/quads emits whole statements and
-// its per-term writer is internal to that package; a term at a time is
-// what a key needs.
+// A term's rendering is both the intern key and what the censuses print,
+// and N-Triples syntax is the one form that serves both: injective, so
+// two distinct terms never render alike, and readable. It is written here
+// rather than taken from the parser repo because rdf/quads emits whole
+// statements and its per-term writer is internal to that package.
+//
+// It appends into a byte buffer rather than writing to an io.Writer: this
+// runs per term per operation, and a virtual call per byte was most of
+// what the first cut of stats spent (0.21 s of 0.57 s over a 4x10^5-op
+// store). Nothing here can fail on the buffer, so `false` means one
+// thing -- a term that is not a term.
 
-nt_term :: proc(w: io.Writer, t: rdf.Term) -> bool {
+nt_term :: proc(b: ^[dynamic]u8, t: rdf.Term) -> bool {
 	switch v in t {
 	case rdf.IRI:
-		return nt_iri(w, string(v))
+		nt_iri(b, string(v))
 	case rdf.Blank_Node:
-		return ws(w, "_:") && ws(w, string(v))
+		append(b, "_:")
+		append(b, string(v))
 	case rdf.Literal:
-		if !nt_quoted(w, v.lexical) {
-			return false
-		}
+		nt_quoted(b, v.lexical)
 		if v.language != "" {
 			// The direction is part of the term's identity (RDF 1.2) and
 			// so must be part of the key: "x"@en--ltr, the N-Triples form.
-			ok := ws(w, "@") && ws(w, v.language)
+			append(b, "@")
+			append(b, v.language)
 			switch v.direction {
 			case .None:
 			case .LTR:
-				ok &&= ws(w, "--ltr")
+				append(b, "--ltr")
 			case .RTL:
-				ok &&= ws(w, "--rtl")
+				append(b, "--rtl")
 			}
-			return ok
+		} else {
+			append(b, "^^")
+			nt_iri(b, string(v.datatype))
 		}
-		return ws(w, "^^") && nt_iri(w, string(v.datatype))
 	case ^rdf.Triple:
 		if v == nil {
 			return false
 		}
-		ok := ws(w, "<<(") && nt_term(w, v.subject) && ws(w, " ")
-		ok &&= nt_term(w, v.predicate) && ws(w, " ")
-		ok &&= nt_term(w, v.object) && ws(w, ")>>")
-		return ok
+		append(b, "<<(")
+		nt_term(b, v.subject) or_return
+		append(b, " ")
+		nt_term(b, v.predicate) or_return
+		append(b, " ")
+		nt_term(b, v.object) or_return
+		append(b, ")>>")
 	case nil:
 		return false
 	}
-	return false
+	return true
 }
 
 // nt_iri escapes what N-Triples forbids inside IRIREF, which is also
 // exactly what injectivity needs: an unescaped `>` would let one IRI
 // render as another term's rendering.
-nt_iri :: proc(w: io.Writer, s: string) -> bool {
-	if io.write_byte(w, '<') != nil {
-		return false
-	}
+nt_iri :: proc(b: ^[dynamic]u8, s: string) {
+	append(b, '<')
 	for i in 0 ..< len(s) {
 		c := s[i]
 		switch c {
 		case 0x00 ..= 0x20, '<', '>', '"', '{', '}', '|', '^', '`', '\\':
-			if !nt_uescape(w, c) {
-				return false
-			}
+			nt_uescape(b, c)
 		case:
-			if io.write_byte(w, c) != nil {
-				return false
-			}
+			append(b, c)
 		}
 	}
-	return io.write_byte(w, '>') == nil
+	append(b, '>')
 }
 
-nt_quoted :: proc(w: io.Writer, s: string) -> bool {
-	if io.write_byte(w, '"') != nil {
-		return false
-	}
+nt_quoted :: proc(b: ^[dynamic]u8, s: string) {
+	append(b, '"')
 	for i in 0 ..< len(s) {
 		c := s[i]
-		esc: string
 		switch c {
 		case '"':
-			esc = `\"`
+			append(b, `\"`)
 		case '\\':
-			esc = `\\`
+			append(b, `\\`)
 		case '\n':
-			esc = `\n`
+			append(b, `\n`)
 		case '\r':
-			esc = `\r`
+			append(b, `\r`)
 		case '\t':
-			esc = `\t`
+			append(b, `\t`)
+		case 0x00 ..= 0x1F:
+			nt_uescape(b, c)
 		case:
-			if c < 0x20 {
-				if !nt_uescape(w, c) {
-					return false
-				}
-			} else if io.write_byte(w, c) != nil {
-				return false
-			}
-			continue
-		}
-		if _, e := io.write_string(w, esc); e != nil {
-			return false
+			append(b, c)
 		}
 	}
-	return io.write_byte(w, '"') == nil
+	append(b, '"')
 }
 
-nt_uescape :: proc(w: io.Writer, c: u8) -> bool {
+nt_uescape :: proc(b: ^[dynamic]u8, c: u8) {
 	hex := "0123456789ABCDEF"
-	esc := [6]u8{'\\', 'u', '0', '0', hex[c>>4], hex[c&0xF]}
-	_, e := io.write_string(w, string(esc[:]))
-	return e == nil
+	append(b, '\\', 'u', '0', '0', hex[c >> 4], hex[c & 0xF])
 }
