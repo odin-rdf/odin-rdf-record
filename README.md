@@ -205,7 +205,7 @@ tools; `make install INSTALL_DIR=/usr/local/bin` for a system install:
 build/rdfrecord verify <dir>                    # full chain verification; head hash and last epoch
 build/rdfrecord head <dir>                      # derived head beside the advisory HEAD file
 build/rdfrecord dump [--format=nquads|json] <dir>   # every fact operation, terms resolved
-build/rdfrecord stats [--format=plain|json] [--prefix=<iri>] <dir>   # a census: live facts, graphs, rdf:type classes
+build/rdfrecord stats [--format=plain|json] [--prefix=<iri>] <dir>   # live facts, graph count, rdf:type class census
 ```
 
 All four are read-only, and that is a constraint rather than an
@@ -223,10 +223,14 @@ Exit codes: 0 clean, 2 a torn tail was found (reported, never repaired
 here), 1 anything else. A dump renders the log — the sequence of
 operations, retractions marked as events — not the graph they produce;
 `stats` renders what those operations leave live, which is the other
-question. `--prefix` restricts the class census to class IRIs with a given
-prefix, and `rdf:type` is the one vocabulary assumption anywhere in this
-repository — it lives in the tool, where a census is a convenience rather
-than a contract.
+question. Graphs are counted rather than listed: a deployment gets one
+graph per organizational workspace named by a UUID, so the list said
+nothing and buried the class census. `epochs` is both the commit count
+and the store's current epoch coordinate — the format's contiguity rule
+makes them the same number — so it is printed once. `--prefix` restricts that census to
+class IRIs with a given prefix, and `rdf:type` is the one vocabulary
+assumption anywhere in this repository — it lives in the tool, where a
+census is a convenience rather than a contract.
 
 There is deliberately no `Term_ID` width matrix here: this store fixes both of
 its ID widths by design — `u64` on disk, `u32` resident with an inline range —

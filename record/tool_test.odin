@@ -241,14 +241,13 @@ test_tool_stats :: proc(t: ^testing.T) {
 	defer delete(head_hex)
 
 	// plain: three asserts and one retract leave two live facts, in two
-	// graphs, of two classes. Both censuses sort by count descending then
-	// by name ascending — here every count is 1, so the order is the
-	// names', and the default graph's empty rendering sorts first.
+	// graphs, of two classes. Graphs are counted and not listed
+	// (RECORD-T-0052); the class census sorts by count descending then by
+	// name ascending — here both counts are 1, so the order is the names'.
 	code, out, err_out := run(t, BIN, "stats", SDIR)
 	testing.expect_value(t, code, 0)
 	want_plain := fmt.tprintf(
 		`head:      %s
-epoch:     2
 segments:  1
 terms:     6
 epochs:    2
@@ -256,10 +255,7 @@ asserts:   3
 retracts:  1
 derived:   0
 facts:     2
-
-graphs: 2
-         1  (default graph)
-         1  <https://data/vsuite.se/g1>
+graphs:    2
 
 classes: 2 (rdf:type objects)
          1  <http://example.org/ns#Other>
@@ -286,7 +282,7 @@ classes: 2 (rdf:type objects)
 		),
 		"the prefix filters the class census and reports the total it filtered from",
 	)
-	testing.expect(t, strings.contains(out, "graphs: 2\n"), "the graph census is not filtered")
+	testing.expect(t, strings.contains(out, "graphs:    2\n"), "the graph count is not filtered")
 	delete(out)
 	delete(err_out)
 
@@ -297,8 +293,8 @@ classes: 2 (rdf:type objects)
 	delete(out)
 	delete(err_out)
 
-	// json: one object, the same figures, graph and class names as
-	// N-Triples term strings and the default graph as null.
+	// json: one object, the same figures, class names as N-Triples term
+	// strings and graphs as a count.
 	code, out, err_out = run(t, BIN, "stats", "--format=json", SDIR)
 	testing.expect_value(t, code, 0)
 	// Assembled with %s rather than written as one format string: the
@@ -307,7 +303,7 @@ classes: 2 (rdf:type objects)
 		"%s%s%s",
 		`{"head":"`,
 		head_hex,
-		`","epoch":2,"segments":1,"terms":6,"epochs":2,"ops":{"assert":3,"retract":1,"derived":0},"facts":2,"torn":false,"anomalies":{"duplicate_assert":0,"retract_not_live":0},"graphs":[{"graph":null,"facts":1},{"graph":"<https://data/vsuite.se/g1>","facts":1}],"classes":{"prefix":null,"distinct":2,"distinct_total":2,"counts":[{"class":"<http://example.org/ns#Other>","instances":1},{"class":"<https://data/vsuite.se/ns#Risk>","instances":1}]}}
+		`","segments":1,"terms":6,"epochs":2,"ops":{"assert":3,"retract":1,"derived":0},"facts":2,"graphs":2,"torn":false,"anomalies":{"duplicate_assert":0,"retract_not_live":0},"classes":{"prefix":null,"distinct":2,"distinct_total":2,"counts":[{"class":"<http://example.org/ns#Other>","instances":1},{"class":"<https://data/vsuite.se/ns#Risk>","instances":1}]}}
 `,
 	)
 	testing.expect_value(t, out, want_json)

@@ -47,13 +47,13 @@ class census.
 
 ## Acceptance Criteria
 
-- [ ] `rdfrecord stats <dir>` prints head, epoch, segments, terms, op totals,
-      live facts, a graph census and a class census.
+- [ ] `rdfrecord stats <dir>` prints head, segments, terms, epochs, op totals,
+      live facts, a graph count and a class census.
 - [ ] `--format=json` prints one JSON object with the same figures; `--format=plain`
       is the default and is the documented human form.
 - [ ] `--prefix=<s>` restricts the class census to class IRIs with that prefix,
       and the JSON output states the prefix it applied.
-- [ ] Both censuses are sorted by count descending, then by name ascending, so
+- [ ] The class census is sorted by count descending, then by name ascending, so
       the output is deterministic and diffable.
 - [ ] **Read-only**: the command opens no writer, stamps no `HEAD`, appends no
       environment note. Exit codes match the existing three: 0 clean, 2 torn
@@ -220,6 +220,34 @@ it is not re-derived: the *next* win after that would be log.md par. 8's own
 argument -- collect the ops flat and sort once instead of hashing 4x10^5 times --
 which would save perhaps 15 MB more and is not worth the complexity in an
 auditor's tool.
+
+**2026-09-06, later — RECORD-T-0052: graphs are counted, not listed.** The
+consumer's deployment gets one named graph per organizational workspace, named
+by a UUID that says nothing, so on a real store the graph census was a wall of
+identifiers above the thing anyone reads. `graphs:` is now a header figure
+beside `facts:`, and the class census is the whole body -- which is the part
+that carries weight, since class counts feed licensing decisions. JSON's
+`"graphs"` is a number where it was an array. The distinct-graph set is still
+built (it is what a count *is*); only the printing went, and `census_label`
+went with it. Restoring the list behind a flag is ~5 lines if anyone asks.
+
+**And the head epoch is not printed beside the commit count**, because they are
+the same number and the format guarantees it: `open.odin` refuses a commit whose
+epoch is not `last_epoch + 1` (`.Epoch_Gap`) and `last_epoch` starts at 0, so
+epochs are contiguous 1..N. `epochs:` carries both meanings -- the count, and the
+coordinate `head` reports and `store_at` takes. The two are still *computed*
+independently, from the chain and from the walk's own commit deliveries, and a
+disagreement is reported on stderr as a defect in this package rather than a
+finding about the log: `log_read`'s flush path for an epoch that defines terms
+and has no ops is exactly where one would hide.
+
+Worth recording against a natural mis-statement of the rule, since it came up:
+"HEAD cannot move without a commit" is not quite true. **An environment note is a
+chain link too** -- `writer_note` hashes over the current head and replaces it
+(`writer.odin:292-301`) -- so a boot whose environment differs moves HEAD with no
+new epoch. A **seal** is the opposite: a summary, not a link, leaving the head
+unchanged. Neither disturbs the equality, because notes and seals arrive on their
+own callbacks and never on `commit`.
 
 **Not changed, and noticed on the way**: `dump --format=json` still refuses a
 triple term -- `json_term`'s `^rdf.Triple` arm returns false with the comment

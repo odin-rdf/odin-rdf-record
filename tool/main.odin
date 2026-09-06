@@ -493,10 +493,15 @@ wu :: proc(w: io.Writer, v: u64) -> bool {
 // contract. --prefix restricts it to class IRIs with a given prefix; a
 // class that is not an IRI never matches one.
 //
-// Both output formats carry the same figures. --format=json renders graph
-// and class names as N-Triples term strings ("<http://...>", "_:b0",
-// "\"x\"@en") rather than bare lexical forms, because a class need not be
-// an IRI and a bare string could not say which it was.
+// Graphs are counted, not listed (RECORD-T-0052): a deployment gets one
+// graph per organizational workspace named by a UUID, so the list was
+// hundreds of lines saying nothing, above the census anyone actually
+// reads.
+//
+// Both output formats carry the same figures. --format=json renders class
+// names as N-Triples term strings ("<http://...>", "_:b0", "\"x\"@en")
+// rather than bare lexical forms, because a class need not be an IRI and a
+// bare string could not say which it was.
 
 Stats_Format :: enum {
 	Plain,
@@ -587,8 +592,27 @@ cmd_stats :: proc(args: []string) -> int {
 		return 1
 	}
 
-	graphs := census_graphs(&st)
-	defer delete(graphs)
+	// The head epoch and the number of commits are the same number, and
+	// the format guarantees it: open.odin refuses a commit whose epoch is
+	// not last_epoch+1 (.Epoch_Gap) and last_epoch starts at 0, so epochs
+	// are contiguous 1..N and the head epoch IS the count. `stats` prints
+	// it once, as `epochs` -- it is both the store's current coordinate
+	// (what `head` reports, what store_at takes) and its commit count.
+	//
+	// They are still computed independently, from the chain and from the
+	// walk's own deliveries, so a disagreement is worth saying out loud:
+	// it would mean log_read delivered a different set of commits than the
+	// chain contains, which is a defect in this package rather than in the
+	// log -- the flush path for an epoch that defines terms and has no ops
+	// is exactly where one would hide.
+	if r.last_epoch != st.epochs {
+		fmt.eprintf(
+			"stats: %s: the walk delivered %d commits for a head epoch of %d — they are the same number by the format's epoch contiguity, so this is a bug, not a finding\n",
+			dir, st.epochs, r.last_epoch,
+		)
+	}
+
+	graphs := count_graphs(&st)
 	classes, class_total := census_classes(&st, prefix, has_prefix)
 	defer delete(classes)
 
@@ -731,13 +755,21 @@ stats_name :: proc(st: ^Stats, id: u32) -> string {
 	return "" if id == 0 else st.names[id - 1]
 }
 
-census_graphs :: proc(st: ^Stats) -> []Census {
-	tally := make(map[u32]u64)
-	defer delete(tally)
+// count_graphs is the number of distinct graphs holding live facts, the
+// default graph counting as one of them where it holds any.
+//
+// It is a count and not a census deliberately (RECORD-T-0052): a
+// deployment gets one graph per organizational workspace, named by a
+// UUID, so the list is hundreds of lines that say nothing -- and it
+// buried the class census, which is the part anyone reads. The
+// distinct-graph set has to be built either way; only the printing went.
+count_graphs :: proc(st: ^Stats) -> int {
+	seen := make(map[u32]bool)
+	defer delete(seen)
 	for k in st.live {
-		tally[k.g] += 1
+		seen[k.g] = true
 	}
-	return census_sorted(st, tally)
+	return len(seen)
 }
 
 // census_classes tallies the object of every live rdf:type fact.
@@ -786,14 +818,14 @@ stats_plain :: proc(
 	w: io.Writer,
 	st: ^Stats,
 	r: rec.Verify_Result,
-	graphs, classes: []Census,
+	graphs: int,
+	classes: []Census,
 	class_total: int,
 	prefix: string,
 	has_prefix, torn: bool,
 ) {
 	hex: [rec.HASH_SIZE * 2]u8
 	fmt.wprintf(w, "head:      %s\n", hex_hash(r.head, hex[:]))
-	fmt.wprintf(w, "epoch:     %d\n", r.last_epoch)
 	fmt.wprintf(w, "segments:  %d\n", r.segments)
 	fmt.wprintf(w, "terms:     %d\n", r.next_term_id - 1)
 	fmt.wprintf(w, "epochs:    %d\n", st.epochs)
@@ -801,6 +833,7 @@ stats_plain :: proc(
 	fmt.wprintf(w, "retracts:  %d\n", st.retracts)
 	fmt.wprintf(w, "derived:   %d\n", st.derived)
 	fmt.wprintf(w, "facts:     %d\n", len(st.live))
+	fmt.wprintf(w, "graphs:    %d\n", graphs)
 	if torn {
 		fmt.wprintf(w, "torn:      yes — the figures above are the durable prefix\n")
 	}
@@ -810,11 +843,6 @@ stats_plain :: proc(
 			"anomalies: %d duplicate asserts, %d retracts of no live fact (log.md par. 5.3)\n",
 			st.dup, st.miss,
 		)
-	}
-
-	fmt.wprintf(w, "\ngraphs: %d\n", len(graphs))
-	for row in graphs {
-		census_row(w, row.count, census_label(row.name))
 	}
 
 	if has_prefix {
@@ -838,53 +866,31 @@ census_row :: proc(w: io.Writer, count: u64, name: string) {
 	fmt.wprintf(w, "%s  %s\n", digits, name)
 }
 
-// census_label names the default graph in the plain output. The empty
-// rendering is unambiguous in the data -- no label renders as nothing --
-// but it is not readable, and the JSON form says null instead.
-census_label :: proc(name: string) -> string {
-	return "(default graph)" if name == "" else name
-}
-
 stats_json :: proc(
 	w: io.Writer,
 	st: ^Stats,
 	r: rec.Verify_Result,
-	graphs, classes: []Census,
+	graphs: int,
+	classes: []Census,
 	class_total: int,
 	prefix: string,
 	has_prefix, torn: bool,
 ) {
 	hex: [rec.HASH_SIZE * 2]u8
 	fmt.wprintf(w, `{{"head":"%s"`, hex_hash(r.head, hex[:]))
-	fmt.wprintf(w, `,"epoch":%d,"segments":%d,"terms":%d`, r.last_epoch, r.segments, r.next_term_id - 1)
-	fmt.wprintf(w, `,"epochs":%d`, st.epochs)
+	fmt.wprintf(w, `,"segments":%d,"terms":%d,"epochs":%d`, r.segments, r.next_term_id - 1, st.epochs)
 	fmt.wprintf(
 		w,
 		`,"ops":{{"assert":%d,"retract":%d,"derived":%d}}`,
 		st.asserts, st.retracts, st.derived,
 	)
-	fmt.wprintf(w, `,"facts":%d`, len(st.live))
+	fmt.wprintf(w, `,"facts":%d,"graphs":%d`, len(st.live), graphs)
 	fmt.wprintf(w, `,"torn":%s`, "true" if torn else "false")
 	fmt.wprintf(
 		w,
 		`,"anomalies":{{"duplicate_assert":%d,"retract_not_live":%d}}`,
 		st.dup, st.miss,
 	)
-
-	ws(w, `,"graphs":[`)
-	for row, i in graphs {
-		if i > 0 {
-			ws(w, ",")
-		}
-		ws(w, `{"graph":`)
-		if row.name == "" {
-			ws(w, "null")
-		} else {
-			json_string(w, row.name)
-		}
-		fmt.wprintf(w, `,"facts":%d}}`, row.count)
-	}
-	ws(w, "]")
 
 	ws(w, `,"classes":{"prefix":`)
 	if has_prefix {
