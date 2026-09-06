@@ -447,7 +447,8 @@ Records the software environment: store format version, reasoner version, the OW
 startup when any of it differs from the last such record.
 
 *Amended 2026-08-20 (RECORD-T-0011): the v1 payload is
-`{"format":1,"derived":"none"}` — the format version this writer speaks, and the
+`{"format":F,"derived":"none"}`, where `F` is §2's header version — the format
+version this writer speaks — and the
 RECORD-A-0002 derived-facts regime (no reasoner exists, derived facts are not
 logged), so the first record after any store's header makes the log
 self-describing on both counts. Two conventions this fixes for our writer, not
@@ -456,6 +457,21 @@ such record" is a byte comparison; and the note is written by `store_open` after
 the writer resumes, which is what "at startup" means concretely. A reasoner's
 arrival grows the payload (engine version, rule set id and hash, per this
 section) and the changed bytes write the next note at the next startup.*
+
+*Amended 2026-09-06 (RECORD-T-0053): the amendment above wrote that payload with
+`"format":1` literally, and so did the writer, and the format became 2 at
+RECORD-I-0004 without either moving. **Every store written between v0.4.0 and
+this fix carries a note claiming format 1 above a header saying 2.** Nothing
+reads the note — the open path compares it byte-for-byte and never parses it —
+so no behaviour depended on the wrong value; what was damaged is this section's
+own promise, to exactly the reader it was made for: someone reading a log from
+this document alone. `F` above is the header's version rather than a literal,
+and the writer selects its payload by `FORMAT_VERSION` in a `when`, so a format
+bump that forgets this record fails the build instead of shipping. Two version
+numbers meet in this payload and only one of them is the "v1": the payload
+schema's, still 1, and the log format's, which is the `format` key's value.
+Existing stores correct themselves at their next boot — the changed bytes differ
+from the last note, which is the mechanism this section already specifies.*
 
 **This record carries the chain.** It is one of two kinds that do — the other is
 the epoch commit — and it does so for the same reason term definitions live inside

@@ -59,13 +59,13 @@ verifiability, a self-description that contradicts the header is worse than none
 
 ## Acceptance Criteria
 
-- [ ] The note's `format` value is `FORMAT_VERSION` rather than a literal, so the
+- [x] The note's `format` value is `FORMAT_VERSION` rather than a literal, so the
       next bump cannot leave it behind.
-- [ ] A test that would have caught this: assert the *written* payload against the
+- [x] A test that would have caught this: assert the *written* payload against the
       header's version, not against the constant that produced it.
-- [ ] `log.md` par. 5.5's amendment is updated -- it quotes the v1 payload verbatim
+- [x] `log.md` par. 5.5's amendment is updated -- it quotes the v1 payload verbatim
       and so states the wrong value too.
-- [ ] Decide and record what existing stores do. A changed payload differs from
+- [x] Decide and record what existing stores do. A changed payload differs from
       the last note, so **every store writes a corrected note at its next boot**,
       by the mechanism already designed for exactly this. That is the right
       outcome and should be stated rather than discovered.
@@ -104,5 +104,38 @@ format.
 
 ## Status Updates
 
-*Filed 2026-09-06, found while answering "what goes into an environment note?".
-Nothing implemented.*
+*Filed 2026-09-06, found while answering "what goes into an environment note?".*
+
+**2026-09-06 — fixed.** `make check` and `make test` green.
+
+The payload is selected by `FORMAT_VERSION` in a `when` rather than derived at
+runtime. It has to stay a compile-time constant -- it is compared as a string
+against the last note, so building it with `aprintf` would put an allocation and
+an ownership question on the boot path for a value that never varies -- and Odin
+will not concatenate a constant into a string literal. So each format version
+names its own payload and an unhandled one hits `#panic`. **The guard was proven
+by breaking it**: `FORMAT_VERSION :: 3` fails the build with
+`ENV_NOTE_V1 must state FORMAT_VERSION (log.md par. 5.5) — add the payload for this
+version, RECORD-T-0053`. The next bump cannot silently keep the old number; it
+can only fail to compile until someone writes the line.
+
+The test now reads the segment header back through the `File_Ops` seam and
+asserts the note's `format` against `hdr.version` -- two values written by
+different code from different constants -- beside the existing byte-equality
+against `ENV_NOTE_V1`, which pins the shape. **That assertion was proven too**:
+restoring `"format":1` fails it with "the note states the format version the
+header does", where the old suite passed. The general rule it is worth carrying:
+a redundant field is only checkable against something independently derived,
+which is the argument `open.odin` already makes about the header's positional
+fields and RECORD-T-0036 will make about the seal.
+
+`log.md` par. 5.5's amendment now writes the payload as `{"format":F,...}` with `F`
+named as the header's version, and carries a dated note recording what the old
+text said and why it was wrong.
+
+**Existing stores correct themselves at their next boot**: the payload differs
+from the last note, so `store_open` appends a new one, which is the mechanism
+par. 5.5 already specifies for exactly this. Nothing to migrate, and no format
+version bump -- the note's payload is opaque to the format. A store's history
+will show a note saying 1 followed by one saying 2, which reads oddly but is the
+literal truth about what its writers claimed.

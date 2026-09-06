@@ -24,8 +24,29 @@ package record
 // comparison. A reasoner's arrival grows this payload (engine version,
 // rule set id and hash, par. 5.5) and writes a differing note at the
 // next startup, exactly as designed.
-@(private)
-ENV_NOTE_V1 :: `{"format":1,"derived":"none"}`
+//
+// **Two version numbers live here and only one of them is the `V1`.**
+// The name is the *payload schema's* version, which is still 1 and has
+// never changed. The `format` key's value is the *log format's*
+// version, which is FORMAT_VERSION and became 2 at RECORD-I-0004. They
+// coincided at 1 when this was written, so the format bump left the
+// payload behind and every store written since v0.4.0 says it is
+// format 1 while its header says 2 (RECORD-T-0053).
+//
+// The `when` is what makes that unrepeatable. The payload must stay a
+// compile-time constant — it is compared as a string against the last
+// note, so building it at runtime would put an allocation and an
+// ownership question on the boot path for a value that never varies —
+// and Odin will not concatenate a constant into a string literal. So
+// each format version names its own payload and an unhandled one fails
+// the build. The next bump cannot silently keep the old number; it can
+// only fail to compile until someone writes the line.
+when FORMAT_VERSION == 2 {
+	@(private)
+	ENV_NOTE_V1 :: `{"format":2,"derived":"none"}`
+} else {
+	#panic("ENV_NOTE_V1 must state FORMAT_VERSION (log.md par. 5.5) — add the payload for this version, RECORD-T-0053")
+}
 
 // store_open boots a store from its directory: log.md par. 7.2's
 // recovery, par. 8's replay as the only load path, the seven sorts, one

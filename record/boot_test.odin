@@ -2,6 +2,7 @@ package record
 
 import "core:fmt"
 import "core:slice"
+import "core:strings"
 import "core:testing"
 
 // Boot's tests (RECORD-T-0011). The resume path's dangerous bug is a
@@ -75,6 +76,26 @@ test_boot_fresh_and_note :: proc(t: ^testing.T) {
 	p0, ok0 := store_note_at(&s, 0)
 	testing.expect(t, ok0, "the note is in effect from epoch 0")
 	testing.expect_value(t, string(p0), ENV_NOTE_V1)
+
+	// And the payload's `format` must equal the version in the segment
+	// header — the two are written by different code from different
+	// constants, and asserting the note against ENV_NOTE_V1 alone
+	// compares the constant with itself, which is how it came to claim
+	// format 1 on a format 2 store for two weeks (RECORD-T-0053). A
+	// redundant field is only checkable against something independently
+	// derived: the argument open.odin already makes about the header's
+	// positional fields.
+	ops := ofs_ops(&fs)
+	seg, sstatus := ops.read(ops.data, "store/000001.rlog", context.allocator)
+	defer delete(seg)
+	testing.expect_value(t, sstatus, Read_Status.Ok)
+	hdr, herr := header_decode(seg)
+	testing.expect_value(t, herr, Decode_Error.None)
+	testing.expect(
+		t,
+		strings.contains(string(p0), fmt.tprintf(`"format":%d,`, hdr.version)),
+		"the note states the format version the header does",
+	)
 
 	terms1 := [1]Term_Def{{id = 1, enc = transmute([]byte)string("\x01http://ex/a")}}
 	ops1 := [1]Fact_Op{{op = .Assert, s = 1, p = 1, o = 1, g = 0}}
