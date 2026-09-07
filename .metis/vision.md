@@ -254,6 +254,55 @@ their side, once that API is real.
 > about the production machine, so a release is measured there, and CI
 > reports the figure without failing on it.
 
+**Amended 2026-09-07 — `v0.9.1` and `v0.10.0`: the tests find their own
+fixtures, and the CLI is `rdfrecord`.** Two releases the paragraphs above do
+not cover, neither of them touching the library.
+
+> `v0.9.1` (`RECORD-T-0047`) was **test-only, and the first defect this
+> repository's *tests* shipped to a consumer.** Three of them located what
+> they needed relative to the process's working directory — the two proof
+> tests ran `tests/verify/rdflog_verify.py`, `test_tool` ran `build/record` —
+> which is invisible from this repository's root and fatal for odin-rdf-app,
+> whose suite compiles this package's tests into its own binary and runs them
+> from its own directory. `PY` and `BIN` are `#directory + "..."` now, the
+> form the three sibling W3C harnesses have used all along, and `test_tool`
+> warns and returns when the CLI is simply not built. The rule worth
+> carrying: **a test locates its fixtures by `#directory`, not by the cwd**,
+> because a library's tests are compiled and run by its consumers.
+>
+> `v0.10.0` is the CLI's release and the library is byte-identical to
+> `v0.9.1` — `doc/api-surface.txt` unmoved at 74 names, no format change, a
+> `v0.9.1` store read and written identically. Three things in it.
+> **`RECORD-T-0048`: the tool installs as `rdfrecord`**, one word, so it sits
+> on PATH beside vsuite-be's `rdfgen`, `rdfcheck`, `rdffmt` and `rdfseed`
+> instead of claiming a word as common as "record"; `make install` builds
+> `tool/` at `-o:speed` into `build/rdfrecord-release` — never over the debug
+> binary the suite asserts exit codes against — and installs it into
+> `INSTALL_DIR`, default `$HOME/.local/bin`. **`RECORD-T-0050`/`-T-0052`: a
+> fourth subcommand, `stats`** — live facts, graph count, an `rdf:type` class
+> census, `--prefix` and `--format=plain|json`. It is folded from the log
+> rather than answered from a booted store, and that is the constraint rather
+> than an oversight: `store_open` recovers, resumes the writer, rewrites
+> `HEAD` and can append an environment note, and **an auditor's tool must not
+> mutate the thing it is auditing**, so all four commands stay read-only and
+> none of them opens the store. It costs ~0.6 s and ~82 MB over a 4×10⁵-op
+> store against a 0.37 s / 35 MB walk beneath it; the gap is a term
+> dictionary rebuilt in the tool, because `log_read` decodes ids into terms
+> and drops the ids (`RECORD-T-0051`, filed, not fixed).
+> **`RECORD-T-0053`: the environment note states the format version.**
+> §5.5's payload had `"format":1` written as a literal in both the document
+> and the writer, and the format became 2 at `RECORD-I-0004` without either
+> moving, so **every store written between `v0.4.0` and this fix carries a
+> note claiming format 1 above a header saying 2.** Nothing reads the note —
+> the open path compares it byte-for-byte and never parses it — so no
+> behaviour depended on the wrong value; what was damaged was that section's
+> promise to exactly the reader it was written for, someone reading a log
+> from `log.md` alone. The writer selects its payload by `FORMAT_VERSION` in
+> a `when`, so the next bump fails the build instead of shipping, and
+> existing stores correct themselves at their next boot by the mechanism §5.5
+> already specifies. Both engines compile with no source change and were
+> walked the same day (`SHACL-T-0047`, `SPARQL-T-0052`).
+
 ## Future State
 
 An embedded store where:
@@ -272,8 +321,9 @@ An embedded store where:
   non-live one) with typed per-quad errors, run validation through a
   consumer-wired hook in `Enforce` or `Record` mode, then encode one epoch —
   append, fsync, apply, publish, in that order.
-- **Tooling stands alone.** `verify`, `dump` (N-Quads/JSON), and `head` give
-  an auditor the read side of the format with no server anywhere.
+- **Tooling stands alone.** `verify`, `dump` (N-Quads/JSON), `head` and
+  `stats` give an auditor the read side of the format with no server
+  anywhere, installed as `rdfrecord` and opening the store for none of it.
 
 Consumers: **odin-rdf-app** as the placeholder consumer; **odin-rdf-shacl**
 validating through the snapshot API so validate-before-commit sits inside
@@ -296,7 +346,7 @@ layer is drafted for it (merge orders, `MatchAs`, leapfrog-triejoin views).
 - **The write surface**: `Apply(Changeset)` with `Enforce`/`Record` validation
   modes and typed per-quad errors (`RECORD-A-0006` decides where the
   validator and the shape catalogue live).
-- **Tooling**: `verify`, `dump`, `head`.
+- **Tooling** (`rdfrecord`): `verify`, `dump`, `head`, `stats`.
 
 ## Success Criteria
 
