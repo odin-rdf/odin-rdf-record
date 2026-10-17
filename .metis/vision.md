@@ -274,7 +274,7 @@ not cover, neither of them touching the library.
 > `v0.9.1` — `doc/api-surface.txt` unmoved at 74 names, no format change, a
 > `v0.9.1` store read and written identically. Three things in it.
 > **`RECORD-T-0048`: the tool installs as `rdfrecord`**, one word, so it sits
-> on PATH beside vsuite-be's `rdfgen`, `rdfcheck`, `rdffmt` and `rdfseed`
+> on PATH beside a consumer's own `rdf`-prefixed tools
 > instead of claiming a word as common as "record"; `make install` builds
 > `tool/` at `-o:speed` into `build/rdfrecord-release` — never over the debug
 > binary the suite asserts exit codes against — and installs it into

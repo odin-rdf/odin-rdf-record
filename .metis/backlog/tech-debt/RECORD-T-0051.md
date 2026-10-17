@@ -50,7 +50,7 @@ should carry the ids.
   | + stats' first cut (live set keyed on the quad's rendered text) | 0.91 s | 0.57 s | 135 MB |
   | + stats as shipped (tool-side intern, live set keyed on four `u32`) | 0.61 s | 0.33 s | 82 MB |
 
-  And on a real store, `vsuite-be/build/volume.record` (1.23 MB log, 24,597
+  And on a real store, a consumer's (1.23 MB log, 24,597
   asserts, 7,556 terms), by peak memory footprint:
 
   | | user | footprint |

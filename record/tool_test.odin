@@ -179,7 +179,7 @@ test_tool :: proc(t: ^testing.T) {
 // vocabulary and build_store's log deliberately has none: two classes
 // under two different namespaces, one of each live in a different graph,
 // and a retract so that "facts" is provably the live set rather than the
-// asserts. --prefix is what makes the vsuite namespace separable from
+// asserts. --prefix is what makes the app namespace separable from
 // the other one.
 @(private = "file")
 SDIR :: "build/tool-stats-test"
@@ -195,12 +195,12 @@ build_stats_store :: proc(t: ^testing.T) -> (head_hex: string) {
 	testing.expect_value(t, err, Writer_Error.None)
 
 	terms := [6]Term_Def{
-		{id = 1, enc = transmute([]u8)string("\x01https://data/vsuite.se/r1")},
+		{id = 1, enc = transmute([]u8)string("\x01https://app.example/r1")},
 		{id = 2, enc = transmute([]u8)string("\x01http://www.w3.org/1999/02/22-rdf-syntax-ns#type")},
-		{id = 3, enc = transmute([]u8)string("\x01https://data/vsuite.se/ns#Risk")},
-		{id = 4, enc = transmute([]u8)string("\x01https://data/vsuite.se/r2")},
+		{id = 3, enc = transmute([]u8)string("\x01https://app.example/ns#Risk")},
+		{id = 4, enc = transmute([]u8)string("\x01https://app.example/r2")},
 		{id = 5, enc = transmute([]u8)string("\x01http://example.org/ns#Other")},
-		{id = 6, enc = transmute([]u8)string("\x01https://data/vsuite.se/g1")},
+		{id = 6, enc = transmute([]u8)string("\x01https://app.example/g1")},
 	}
 	ops1 := [3]Fact_Op{
 		{op = .Assert, s = 1, p = 2, o = 3, g = DEFAULT_GRAPH}, // r1 a Risk
@@ -259,7 +259,7 @@ graphs:    2
 
 classes: 2 (rdf:type objects)
          1  <http://example.org/ns#Other>
-         1  <https://data/vsuite.se/ns#Risk>
+         1  <https://app.example/ns#Risk>
 `,
 		head_hex,
 	)
@@ -270,14 +270,14 @@ classes: 2 (rdf:type objects)
 
 	// --prefix restricts the class census and says what it restricted
 	// from; the graph census is untouched, and so is `facts`.
-	code, out, err_out = run(t, BIN, "stats", "--prefix=https://data/vsuite.se/", SDIR)
+	code, out, err_out = run(t, BIN, "stats", "--prefix=https://app.example/", SDIR)
 	testing.expect_value(t, code, 0)
 	testing.expect(
 		t,
 		strings.contains(
 			out,
-			`classes: 1 of 2 (rdf:type objects with prefix "https://data/vsuite.se/")
-         1  <https://data/vsuite.se/ns#Risk>
+			`classes: 1 of 2 (rdf:type objects with prefix "https://app.example/")
+         1  <https://app.example/ns#Risk>
 `,
 		),
 		"the prefix filters the class census and reports the total it filtered from",
@@ -287,7 +287,7 @@ classes: 2 (rdf:type objects)
 	delete(err_out)
 
 	// An IRI prefix written in angle brackets is the same prefix.
-	code, out, err_out = run(t, BIN, "stats", "--prefix=<https://data/vsuite.se/>", SDIR)
+	code, out, err_out = run(t, BIN, "stats", "--prefix=<https://app.example/>", SDIR)
 	testing.expect_value(t, code, 0)
 	testing.expect(t, strings.contains(out, "classes: 1 of 2"), "a bracketed prefix is unwrapped")
 	delete(out)
@@ -303,7 +303,7 @@ classes: 2 (rdf:type objects)
 		"%s%s%s",
 		`{"head":"`,
 		head_hex,
-		`","segments":1,"terms":6,"epochs":2,"ops":{"assert":3,"retract":1,"derived":0},"facts":2,"graphs":2,"torn":false,"anomalies":{"duplicate_assert":0,"retract_not_live":0},"classes":{"prefix":null,"distinct":2,"distinct_total":2,"counts":[{"class":"<http://example.org/ns#Other>","instances":1},{"class":"<https://data/vsuite.se/ns#Risk>","instances":1}]}}
+		`","segments":1,"terms":6,"epochs":2,"ops":{"assert":3,"retract":1,"derived":0},"facts":2,"graphs":2,"torn":false,"anomalies":{"duplicate_assert":0,"retract_not_live":0},"classes":{"prefix":null,"distinct":2,"distinct_total":2,"counts":[{"class":"<http://example.org/ns#Other>","instances":1},{"class":"<https://app.example/ns#Risk>","instances":1}]}}
 `,
 	)
 	testing.expect_value(t, out, want_json)

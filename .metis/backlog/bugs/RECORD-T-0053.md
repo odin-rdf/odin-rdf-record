@@ -43,7 +43,7 @@ every store written since `v0.4.0`.
 - **Reproduction Steps**:
   1. `strings -a <store>/000001.rlog | grep -o '{"format":[^}]*}'` -> `{"format":1,"derived":"none"}`
   2. `xxd -s 8 -l 4 <store>/000001.rlog` -> `0000 0002`
-  Reproduced on `vsuite-be/build/volume.record`, 2026-09-06.
+  Reproduced on a consumer's store, 2026-09-06.
 - **Expected vs Actual**: `log.md` par. 5.5 specifies the payload's `format` key as
   "the format version this writer speaks". A format 2 writer says 1.
 

@@ -178,7 +178,7 @@ which is what an assertion on exact bytes is for -- and the same store now reads
 
     0.61 s wall, 0.33 s user, 82 MB RSS
 
-**2026-09-06, later still — measured on a real store**, `vsuite-be/build/volume.record`
+**2026-09-06, later still — measured on a real store**, a consumer's
 (1.23 MB log, 12 epochs, 24,597 asserts, **0 retracts**, 24,597 live facts, 7,556
 terms, 21 graphs), optimized builds, macOS peak memory footprint rather than
 maximum RSS -- the two differ by the binary's own file-backed pages, ~6.6 MB

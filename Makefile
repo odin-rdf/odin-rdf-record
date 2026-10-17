@@ -84,9 +84,9 @@ api: ## Check the exported surface against doc/api-surface.txt
 
 # The CLI (log.md par. 12 q6): verify, dump, head — the auditor's read
 # surface, a consumer of the record package like any other. The binary is
-# `rdfrecord` rather than `record`: installed, it sits on PATH beside
-# vsuite-be's rdfgen, rdfcheck, rdffmt and rdfseed, and `record` is a word
-# too common to own there. record/tool_test.odin locates it by #directory.
+# `rdfrecord` rather than `record`: installed, it sits on PATH beside a
+# consumer's own rdf-prefixed tools (a generator, a checker, a formatter, a
+# seeder), and `record` is a word too common to own there. record/tool_test.odin locates it by #directory.
 BIN := build/rdfrecord
 
 tool: ## Build the record CLI into build/rdfrecord
@@ -98,7 +98,7 @@ tool: ## Build the record CLI into build/rdfrecord
 # the test suite drives; an installed tool is somebody's auditor, so it is
 # built -o:speed into its own path and never overwrites build/rdfrecord.
 # INSTALL_DIR is the one knob, defaulting to the per-user bin directory the
-# XDG layout puts on PATH, matching vsuite-be's install target; a system
+# XDG layout puts on PATH, the usual per-user install target; a system
 # install is `make install INSTALL_DIR=/usr/local/bin` under whatever
 # privilege that needs. `install -m 0755` rather than `cp` so a running
 # binary is replaced rather than written through, and so the mode is stated
